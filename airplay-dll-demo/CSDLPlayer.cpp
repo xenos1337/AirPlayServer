@@ -30,6 +30,8 @@ CSDLPlayer::CSDLPlayer()
 	, m_rect()
 	, m_server()
 	, m_fRatio(1.0f)
+	, m_hwnd(NULL)
+	, m_bWindowVisible(false)
 {
 	ZeroMemory(&m_sAudioFmt, sizeof(SFgAudioFrame));
 	ZeroMemory(&m_rect, sizeof(SDL_Rect));
@@ -61,10 +63,23 @@ bool CSDLPlayer::init()
 
 	initVideo(600, 400);
 
+	// Get the window handle for show/hide operations
+	SDL_SysWMinfo wmInfo;
+	SDL_VERSION(&wmInfo.version);
+	if (SDL_GetWMInfo(&wmInfo) == 1) {
+		m_hwnd = wmInfo.window;
+	}
+
+	// Start with window hidden - waiting for AirPlay connection
+	hideWindow();
+
 	/* Filter quit and mouse motion events */
 	SDL_SetEventFilter(FilterEvents);
 
+	// Auto-start the server
 	m_server.start(this);
+	printf("AirPlay server started. Waiting for connections...\n");
+	printf("Window will appear when a device connects.\n\n");
 
 	return true;
 }
@@ -92,7 +107,23 @@ void CSDLPlayer::loopEvents()
 				if (width != m_rect.w || height != m_rect.h || m_yuv == NULL) {
 					unInitVideo();
 					initVideo(width, height);
+					// Re-acquire window handle after video reinit
+					SDL_SysWMinfo wmInfo;
+					SDL_VERSION(&wmInfo.version);
+					if (SDL_GetWMInfo(&wmInfo) == 1) {
+						m_hwnd = wmInfo.window;
+					}
+					// Make sure window is visible after resize
+					if (m_bWindowVisible) {
+						ShowWindow(m_hwnd, SW_SHOW);
+					}
 				}
+			}
+			else if (event.user.code == SHOW_WINDOW_CODE) {
+				showWindow();
+			}
+			else if (event.user.code == HIDE_WINDOW_CODE) {
+				hideWindow();
 			}
 			break;
 		}
@@ -366,4 +397,49 @@ void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
 			break;
 		}
 	}
+}
+
+void CSDLPlayer::showWindow()
+{
+	if (m_hwnd != NULL && !m_bWindowVisible) {
+		ShowWindow(m_hwnd, SW_SHOW);
+		SetForegroundWindow(m_hwnd);
+		m_bWindowVisible = true;
+		SDL_WM_SetCaption("AirPlay Demo - Connected [q - stop server]", NULL);
+	}
+}
+
+void CSDLPlayer::hideWindow()
+{
+	if (m_hwnd != NULL && m_bWindowVisible) {
+		ShowWindow(m_hwnd, SW_HIDE);
+		m_bWindowVisible = false;
+	}
+	else if (m_hwnd != NULL) {
+		// Initial hide
+		ShowWindow(m_hwnd, SW_HIDE);
+		m_bWindowVisible = false;
+	}
+}
+
+void CSDLPlayer::requestShowWindow()
+{
+	SDL_Event evt;
+	evt.type = SDL_USEREVENT;
+	evt.user.type = SDL_USEREVENT;
+	evt.user.code = SHOW_WINDOW_CODE;
+	evt.user.data1 = NULL;
+	evt.user.data2 = NULL;
+	SDL_PushEvent(&evt);
+}
+
+void CSDLPlayer::requestHideWindow()
+{
+	SDL_Event evt;
+	evt.type = SDL_USEREVENT;
+	evt.user.type = SDL_USEREVENT;
+	evt.user.code = HIDE_WINDOW_CODE;
+	evt.user.data1 = NULL;
+	evt.user.data2 = NULL;
+	SDL_PushEvent(&evt);
 }

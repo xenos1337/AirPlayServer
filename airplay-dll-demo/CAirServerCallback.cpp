@@ -27,11 +27,22 @@ void CAirServerCallback::connected(const char* remoteName, const char* remoteDev
 
 	setlocale(LC_CTYPE, "");
 	std::wstring name = CFgUtf8Utils::UTF8_To_UTF16(remoteName);
-	wprintf(L"Client Name: %s\n", name.c_str());
+	wprintf(L"Client connected: %s\n", name.c_str());
+
+	// Show the window when a client connects
+	if (m_pPlayer) {
+		m_pPlayer->requestShowWindow();
+	}
 }
 
 void CAirServerCallback::disconnected(const char* remoteName, const char* remoteDeviceId) {
 	memset(m_chRemoteDeviceId, 0, 128);
+	printf("Client disconnected\n");
+
+	// Hide the window when client disconnects
+	if (m_pPlayer) {
+		m_pPlayer->requestHideWindow();
+	}
 }
 
 void CAirServerCallback::outputAudio(SFgAudioFrame* data, const char* remoteName, const char* remoteDeviceId)

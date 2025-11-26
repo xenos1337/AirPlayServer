@@ -1,4 +1,6 @@
-﻿// airplay-dll-demo.cpp : 此文件包含 "main" 函数。程序执行将在此处开始并结束。
+﻿// airplay-dll-demo.cpp : AirPlay Receiver - Main Program
+// Starts automatically and waits for AirPlay connections.
+// Window appears when a device connects.
 //
 #include <windows.h>
 #include <iostream>
@@ -11,15 +13,25 @@ int main()
 {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 
-    printf("Usage: \n [s] to start server\n [q] to stop\n [-] and [=] to scale video size.\n\n");
+    printf("===========================================\n");
+    printf("       AirPlay Receiver for Windows\n");
+    printf("===========================================\n\n");
+    printf("The server will start automatically.\n");
+    printf("Display window is hidden until a device connects.\n\n");
+    printf("Controls (when window is visible):\n");
+    printf("  [q] - Stop server\n");
+    printf("  [s] - Restart server\n");
+    printf("  [-] and [=] - Scale video size\n\n");
 
     CSDLPlayer player;
-    player.init();
+    if (!player.init()) {
+        printf("Failed to initialize player!\n");
+        return 1;
+    }
 
     player.loopEvents();
 
-    /* This should never happen */
-    printf("SDL_WaitEvent error: %s\n", SDL_GetError());
+    printf("AirPlay Receiver shutting down.\n");
 
     return 0;
 }

@@ -4,6 +4,7 @@
 #include <queue>
 #include "SDL.h"
 #include "SDL_thread.h"
+#include "SDL_syswm.h"
 #undef main 
 #include "CAirServer.h"
 
@@ -20,6 +21,8 @@ typedef std::queue<SDemoAudioFrame*> SDemoAudioFrameQueue;
 typedef std::queue<SFgVideoFrame*> SFgVideoFrameQueue;
 
 #define VIDEO_SIZE_CHANGED_CODE 1
+#define SHOW_WINDOW_CODE 2
+#define HIDE_WINDOW_CODE 3
 
 class CSDLPlayer
 {
@@ -40,6 +43,12 @@ public:
 	void unInitAudio();
 	static void sdlAudioCallback(void* userdata, Uint8* stream, int len);
 
+	// Window visibility control
+	void showWindow();
+	void hideWindow();
+	void requestShowWindow();  // Thread-safe: posts event to show window
+	void requestHideWindow();  // Thread-safe: posts event to hide window
+
 	SDL_Surface* m_surface;
 	//SDL_VideoInfo* vi;
 	SDL_Overlay* m_yuv;
@@ -58,5 +67,9 @@ public:
 
 	CAirServer m_server;
 	float m_fRatio;
+
+	// Window handle for show/hide
+	HWND m_hwnd;
+	bool m_bWindowVisible;
 };
 
