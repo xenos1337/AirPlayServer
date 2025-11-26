@@ -1,0 +1,156 @@
+# Visual Studio / C++ .gitignore
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.ncb
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+.vs/
+*.vcxproj.filters
+*.aps
+
+# Build logs
+*.log
+*.tlog
+msbuild.log
+msbuild.wrn
+msbuild.err
+
+# Object files
+*.obj
+*.o
+*.lo
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Linker files
+*.ilk
+*.lib
+*.exp
+*.map
+
+# Debug files
+*.pdb
+*.idb
+
+# Executables
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+
+# IntelliSense
+*.VC.opendb
+ipch/
+*.ipch
+
+# ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Visual Studio upgrade log
+UpgradeLog*.htm
+UpgradeLog*.XML
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# Visual Studio cache files
+*.cachefile
+*.cache
+*.cachedata
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# NuGet packages
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+
+# Windows-specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Backup files
+*~
+*.bak
+*.swp
+*.swo
+*_backup*
+
+# Temporary files
+*.tmp
+*.temp
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CMakeScripts/
+
+# Build directories
+build/
+out/
+
+# Code coverage
+*.gcno
+*.gcda
+*.gcov
+
+# Visual Studio Code
+.vscode/
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+
+# Recipe files
+*.recipe
+
+# Last build state
+*.lastbuildstate
