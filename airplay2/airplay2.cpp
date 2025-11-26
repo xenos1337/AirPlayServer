@@ -1,7 +1,7 @@
-﻿// airplay2.cpp : Defines functions for the static library.
+﻿// airplay2.cpp : 定义静态库的函数。
 //
 
-// TODO: This is an example library function
+// TODO: 这是一个库函数示例
 void fnairplay2()
 {
 }
