@@ -10,7 +10,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "airplay2dll", "airplay2dll\
 		{54FE79F9-FA82-4BFD-99A2-5CE9DEB1D356} = {54FE79F9-FA82-4BFD-99A2-5CE9DEB1D356}
 	EndProjectSection
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "airplay-dll-demo", "airplay-dll-demo\airplay-dll-demo.vcxproj", "{C3752775-FD35-4C0F-8BA1-803485A47FB2}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AirPlayServer", "AirPlayServer\AirPlayServer.vcxproj", "{C3752775-FD35-4C0F-8BA1-803485A47FB2}"
 	ProjectSection(ProjectDependencies) = postProject
 		{05D43605-FEB8-4D46-8CA8-A43DFCB53EA3} = {05D43605-FEB8-4D46-8CA8-A43DFCB53EA3}
 	EndProjectSection
