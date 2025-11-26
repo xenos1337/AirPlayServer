@@ -147,13 +147,13 @@ void CSDLPlayer::loopEvents()
 				case SDLK_q: {
 					printf("key down");
 					m_server.stop();
-					SDL_WM_SetCaption("AirPlay Demo - Stopped [s - start server, q - stop server]", NULL);
+					SDL_WM_SetCaption("AirPlay Server - Stopped [s - start, q - quit]", NULL);
 					break;
 				}
 				case SDLK_s: {
 					printf("key down");
 					m_server.start(this);
-					SDL_WM_SetCaption("AirPlay Demo - Started [s - start server, q - stop server]", NULL);
+					SDL_WM_SetCaption("AirPlay Server - Started [s - restart, q - quit]", NULL);
 					break;
 				}
 				case SDLK_EQUALS: {
@@ -253,7 +253,7 @@ void CSDLPlayer::outputAudio(SFgAudioFrame* data)
 		}
 	}
 
-	SDemoAudioFrame* dataClone = new SDemoAudioFrame();
+	SAudioFrame* dataClone = new SAudioFrame();
 	dataClone->dataTotal = data->dataLen;
 	dataClone->pts = data->pts;
 	dataClone->dataLeft = dataClone->dataTotal;
@@ -270,7 +270,7 @@ void CSDLPlayer::initVideo(int width, int height)
 {
 	// 0x115
 	m_surface = SDL_SetVideoMode(width, height, 0, SDL_SWSURFACE);
-	SDL_WM_SetCaption("AirPlay Demo [s - start server, q - stop server]", NULL);
+	SDL_WM_SetCaption("AirPlay Server [s - restart, q - quit]", NULL);
 
 	{
 		CAutoLock oLock(m_mutexVideo, "initVideo");
@@ -337,7 +337,7 @@ void CSDLPlayer::initAudio(SFgAudioFrame* data)
 		m_bAudioInited = true;
 
 		if (m_bDumpAudio) {
-			m_fileWav = fopen("demo-audio.wav", "wb");
+			m_fileWav = fopen("airplay-audio.wav", "wb");
 		}
 	}
 	if (m_queueAudio.size() > 5) {
@@ -355,7 +355,7 @@ void CSDLPlayer::unInitAudio()
 		CAutoLock oLock(m_mutexAudio, "unInitAudio");
 		while (!m_queueAudio.empty())
 		{
-			SDemoAudioFrame* pAudioFrame = m_queueAudio.front();
+			SAudioFrame* pAudioFrame = m_queueAudio.front();
 			delete[] pAudioFrame->data;
 			delete pAudioFrame;
 			m_queueAudio.pop();
@@ -378,7 +378,7 @@ void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
 	CAutoLock oLock(pThis->m_mutexAudio, "sdlAudioCallback");
 	while (!pThis->m_queueAudio.empty())
 	{
-		SDemoAudioFrame* pAudioFrame = pThis->m_queueAudio.front();
+		SAudioFrame* pAudioFrame = pThis->m_queueAudio.front();
 		int pos = pAudioFrame->dataTotal - pAudioFrame->dataLeft;
 		int readLen = min(pAudioFrame->dataLeft, needLen);
 
@@ -405,7 +405,7 @@ void CSDLPlayer::showWindow()
 		ShowWindow(m_hwnd, SW_SHOW);
 		SetForegroundWindow(m_hwnd);
 		m_bWindowVisible = true;
-		SDL_WM_SetCaption("AirPlay Demo - Connected [q - stop server]", NULL);
+		SDL_WM_SetCaption("AirPlay Server - Connected [q - quit]", NULL);
 	}
 }
 

@@ -6,9 +6,9 @@ Migrate [AirplayServer](https://github.com/KqSMea8/AirplayServer) and [dnssd](ht
 ## Build
 
 - Open `airplay2-win.sln` in Visual Studio 2019.
-- Make `airplay-dll-demo` as Start Project.
-- `Ctrl + B`, Build `airplay-dll-demo`.
-- The generated lib and dll files will be placed in `AirPlayServer` folder.
+- Make `AirPlayServer` as Start Project.
+- `Ctrl + B`, Build `AirPlayServer`.
+- The generated exe will be placed in `x64\Debug` folder.
 
 ## Reference
 

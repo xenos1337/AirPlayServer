@@ -10,14 +10,14 @@
 
 typedef void sdlAudioCallback(void* userdata, Uint8* stream, int len);
 
-typedef struct SDemoAudioFrame {
+typedef struct SAudioFrame {
 	unsigned long long pts;
 	unsigned int dataTotal;
 	unsigned int dataLeft;
 	unsigned char* data;
-} SDemoAudioFrame;
+} SAudioFrame;
 
-typedef std::queue<SDemoAudioFrame*> SDemoAudioFrameQueue;
+typedef std::queue<SAudioFrame*> SAudioFrameQueue;
 typedef std::queue<SFgVideoFrame*> SFgVideoFrameQueue;
 
 #define VIDEO_SIZE_CHANGED_CODE 1
@@ -56,7 +56,7 @@ public:
 
 	SFgAudioFrame m_sAudioFmt;
 	bool m_bAudioInited;
-	SDemoAudioFrameQueue m_queueAudio;
+	SAudioFrameQueue m_queueAudio;
 	HANDLE m_mutexAudio;
 	HANDLE m_mutexVideo;
 
