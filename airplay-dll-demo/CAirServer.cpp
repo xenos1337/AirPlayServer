@@ -47,7 +47,7 @@ void CAirServer::start(CSDLPlayer* pPlayer)
 	memset(hostName, 0, sizeof(hostName));
 	getHostName(hostName);
 	char serverName[1024] = { 0 };
-	sprintf_s(serverName, 1024, "FgAirplay[%s]", hostName);
+	sprintf_s(serverName, 1024, "%s", hostName);
     m_pServer = fgServerStart(serverName, 5001, 7001, m_pCallback);
 }
 
