@@ -49,6 +49,8 @@ void CAirServerCallback::disconnected(const char* remoteName, const char* remote
 	// Update connection state - keep window visible to show home screen
 	if (m_pPlayer) {
 		m_pPlayer->setConnected(false, NULL);
+		// Clear the video feed to black (remove last frame)
+		m_pPlayer->clearToBlack();
 		// Don't hide window - show home screen instead
 	}
 }
