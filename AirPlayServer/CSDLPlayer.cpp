@@ -14,14 +14,14 @@ static inline Uint8 ClampByte(int value) {
 
 // Convert YUV pixel to RGB
 static inline void YUVToRGB(int y, int u, int v, Uint8* r, Uint8* g, Uint8* b) {
-	// BT.601 conversion
-	int c = y - 16;
+	// BT.601 full range conversion (0-255)
+	// Most modern streaming uses full range YUV
 	int d = u - 128;
 	int e = v - 128;
 	
-	*r = ClampByte((298 * c + 409 * e + 128) >> 8);
-	*g = ClampByte((298 * c - 100 * d - 208 * e + 128) >> 8);
-	*b = ClampByte((298 * c + 516 * d + 128) >> 8);
+	*r = ClampByte(y + ((359 * e + 128) >> 8));
+	*g = ClampByte(y - ((88 * d + 183 * e + 128) >> 8));
+	*b = ClampByte(y + ((454 * d + 128) >> 8));
 }
 
 /* This function may run in a separate event thread */
@@ -261,17 +261,6 @@ void CSDLPlayer::loopEvents()
 		case SDL_KEYUP: {
 			switch (event.key.keysym.sym)
 			{
-				case SDLK_q: {
-					printf("Stopping server...\n");
-					m_server.stop();
-					SDL_WM_SetCaption("AirPlay Server - Stopped [s - start, q - quit]", NULL);
-					break;
-				}
-				case SDLK_s: {
-					m_server.start(this, strlen(m_serverName) > 0 ? m_serverName : NULL);
-					SDL_WM_SetCaption("AirPlay Server - Started [s - restart, q - quit]", NULL);
-					break;
-				}
 				case SDLK_ESCAPE: {
 					// ESC exits fullscreen
 					if (m_bFullscreen) {
@@ -288,12 +277,16 @@ void CSDLPlayer::loopEvents()
 			break;
 		}
 
-			case SDL_QUIT: {
-				printf("Quit requested, quitting.\n");
-				m_server.stop();
-				bEndLoop = TRUE;
-				break;
-			}
+		case SDL_QUIT: {
+			printf("Quit requested, quitting.\n");
+			// Stop server first before exiting the event loop
+			// This ensures clean shutdown and prevents callbacks during destruction
+			m_server.stop();
+			// Small delay to allow server to fully stop
+			SDL_Delay(100);
+			bEndLoop = TRUE;
+			break;
+		}
 			}
 		} // End of event polling loop
 		
@@ -309,8 +302,8 @@ void CSDLPlayer::loopEvents()
 		// Update display - flip surface to show video + ImGui composite
 		SDL_Flip(m_surface);
 		
-		// Small delay to avoid maxing out CPU
-		SDL_Delay(8); // ~60 FPS
+		// Small delay to avoid maxing out CPU and prevent video processing delays
+		SDL_Delay(16); // 30 FPS
 	}
 }
 
@@ -435,7 +428,7 @@ void CSDLPlayer::initVideo(int width, int height)
 	
 	// Create resizable window with software surface
 	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_RESIZABLE);
-	SDL_WM_SetCaption("AirPlay Server [s - restart, q - quit]", NULL);
+	SDL_WM_SetCaption("AirPlay Server", NULL);
 
 	// Fill with black initially
 	clearToBlack();
@@ -914,7 +907,7 @@ void CSDLPlayer::showWindow()
 		ShowWindow(m_hwnd, SW_SHOW);
 		SetForegroundWindow(m_hwnd);
 		m_bWindowVisible = true;
-		SDL_WM_SetCaption("AirPlay Server - Connected [q - quit]", NULL);
+		SDL_WM_SetCaption("AirPlay Server - Connected", NULL);
 	}
 }
 
