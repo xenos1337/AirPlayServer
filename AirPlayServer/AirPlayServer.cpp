@@ -25,6 +25,8 @@ void CleanupAndShutdown()
     printf("Initiating graceful shutdown...\n");
     if (g_pPlayer != NULL) {
         g_pPlayer->m_server.stop();
+        // Give time for server to stop completely
+        Sleep(150);
     }
 }
 
