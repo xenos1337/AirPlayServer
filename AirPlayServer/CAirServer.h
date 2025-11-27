@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 
 class CSDLPlayer;
 class CAirServerCallback;
@@ -10,7 +11,7 @@ public:
 	~CAirServer();
 
 public:
-	void start(CSDLPlayer* pPlayer);
+	void start(CSDLPlayer* pPlayer, const char* serverName = NULL);
 	void stop();
 	float setVideoScale(float fRatio);
 
