@@ -228,17 +228,19 @@ void FgAirplayServer::disconnected(void* cls, const char* remoteName, const char
 	Sleep(50);
 
 	// Now safely remove the channel
-	CAutoLock oLock(pServer->m_mutexMap, "disconnected");
-	std::string deviceId(remoteDeviceId);
-	FgAirplayChannelMap::iterator it = pServer->m_mapChannel.find(deviceId);
-	if (it != pServer->m_mapChannel.end()) {
-		FgAirplayChannel* pChannel = it->second;
-		pServer->m_mapChannel.erase(it);
-		// Release outside the critical section to avoid holding lock too long
-		oLock.unlock();
-		if (pChannel) {
-			pChannel->release();
+	FgAirplayChannel* pChannel = NULL;
+	{
+		CAutoLock oLock(pServer->m_mutexMap, "disconnected");
+		std::string deviceId(remoteDeviceId);
+		FgAirplayChannelMap::iterator it = pServer->m_mapChannel.find(deviceId);
+		if (it != pServer->m_mapChannel.end()) {
+			pChannel = it->second;
+			pServer->m_mapChannel.erase(it);
 		}
+	}
+	// Release outside the critical section to avoid holding lock too long
+	if (pChannel) {
+		pChannel->release();
 	}
 }
 
