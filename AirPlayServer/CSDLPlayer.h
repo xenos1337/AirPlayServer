@@ -86,6 +86,10 @@ public:
 	bool m_bConnected;
 	char m_connectedDeviceName[256];
 	
+	// Disconnect transition (to render black screen briefly)
+	bool m_bDisconnecting;
+	DWORD m_dwDisconnectStartTime;
+	
 	void calculateDisplayRect();  // Calculate centered letterboxed display rect
 	void clearToBlack();          // Fill surface with black
 	void resizeWindow(int width, int height);  // Handle window resize

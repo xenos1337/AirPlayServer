@@ -70,6 +70,8 @@ CSDLPlayer::CSDLPlayer()
 	ZeroMemory(m_serverName, sizeof(m_serverName));
 	ZeroMemory(m_connectedDeviceName, sizeof(m_connectedDeviceName));
 	m_bConnected = false;
+	m_bDisconnecting = false;
+	m_dwDisconnectStartTime = 0;
 	m_mutexAudio = CreateMutex(NULL, FALSE, NULL);
 	m_mutexVideo = CreateMutex(NULL, FALSE, NULL);
 	s_instance = this;
@@ -154,6 +156,13 @@ void CSDLPlayer::setServerName(const char* serverName)
 
 void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 {
+	if (m_bConnected && !connected) {
+		// Transitioning from connected to disconnected
+		// Start the disconnect transition to show black screen
+		m_bDisconnecting = true;
+		m_dwDisconnectStartTime = GetTickCount();
+	}
+	
 	m_bConnected = connected;
 	if (deviceName) {
 		strncpy_s(m_connectedDeviceName, sizeof(m_connectedDeviceName), deviceName, _TRUNCATE);
@@ -290,11 +299,24 @@ void CSDLPlayer::loopEvents()
 			}
 		} // End of event polling loop
 		
+		// Handle disconnect transition (show black screen briefly)
+		if (m_bDisconnecting) {
+			DWORD elapsed = GetTickCount() - m_dwDisconnectStartTime;
+			if (elapsed >= 800) {  // Show black screen for 800ms
+				m_bDisconnecting = false;
+			}
+		}
+		
 		// Render ImGui every frame (outside of event polling)
 		m_imgui.NewFrame(m_surface);
 		if (m_bConnected) {
+			// Connected - show overlay with controls
 			m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName);
+		} else if (m_bDisconnecting) {
+			// Disconnecting - render nothing (show black screen)
+			// Don't render any UI to hide the controls
 		} else {
+			// Disconnected - show home screen
 			m_imgui.RenderHomeScreen(m_serverName, m_bConnected, m_connectedDeviceName);
 		}
 		m_imgui.Render(m_surface);
