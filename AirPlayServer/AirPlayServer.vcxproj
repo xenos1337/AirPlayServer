@@ -90,7 +90,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_CRTDBG_MAP_ALLOC;WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -112,7 +112,7 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_CRTDBG_MAP_ALLOC;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -136,7 +136,7 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -162,7 +162,7 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -183,13 +183,19 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
     <ClCompile Include="CAirServer.cpp" />
     <ClCompile Include="CAirServerCallback.cpp" />
     <ClCompile Include="CAutoLock.cpp" />
+    <ClCompile Include="CImGuiManager.cpp" />
     <ClCompile Include="CSDLPlayer.cpp" />
     <ClCompile Include="FgUtf8Utils.cpp" />
+    <ClCompile Include="..\external\imgui\imgui.cpp" />
+    <ClCompile Include="..\external\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\external\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\external\imgui\imgui_widgets.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CAirServer.h" />
     <ClInclude Include="CAirServerCallback.h" />
     <ClInclude Include="CAutoLock.h" />
+    <ClInclude Include="CImGuiManager.h" />
     <ClInclude Include="CSDLPlayer.h" />
     <ClInclude Include="FgUtf8Utils.h" />
   </ItemGroup>

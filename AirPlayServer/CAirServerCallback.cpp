@@ -29,8 +29,15 @@ void CAirServerCallback::connected(const char* remoteName, const char* remoteDev
 	std::wstring name = CFgUtf8Utils::UTF8_To_UTF16(remoteName);
 	wprintf(L"Client connected: %s\n", name.c_str());
 
-	// Show the window when a client connects
+	// Update connection state and show the window when a client connects
 	if (m_pPlayer) {
+		// Convert wide string to UTF-8 for ImGui
+		char deviceNameUtf8[256] = { 0 };
+		if (remoteName) {
+			// Simple conversion - in production, use proper UTF-8 conversion
+			WideCharToMultiByte(CP_UTF8, 0, name.c_str(), -1, deviceNameUtf8, sizeof(deviceNameUtf8), NULL, NULL);
+		}
+		m_pPlayer->setConnected(true, deviceNameUtf8);
 		m_pPlayer->requestShowWindow();
 	}
 }
@@ -39,9 +46,10 @@ void CAirServerCallback::disconnected(const char* remoteName, const char* remote
 	memset(m_chRemoteDeviceId, 0, 128);
 	printf("Client disconnected\n");
 
-	// Hide the window when client disconnects
+	// Update connection state - keep window visible to show home screen
 	if (m_pPlayer) {
-		m_pPlayer->requestHideWindow();
+		m_pPlayer->setConnected(false, NULL);
+		// Don't hide window - show home screen instead
 	}
 }
 

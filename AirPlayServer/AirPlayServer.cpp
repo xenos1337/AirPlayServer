@@ -1,6 +1,6 @@
 ﻿// AirPlayServer.cpp : AirPlay Receiver - Main Program
 // Starts automatically and waits for AirPlay connections.
-// Window appears when a device connects.
+// Window shows home screen with ImGui UI.
 //
 #include <windows.h>
 #include <iostream>
@@ -13,25 +13,31 @@ int main()
 {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 
-    printf("===========================================\n");
-    printf("       AirPlay Receiver for Windows\n");
-    printf("===========================================\n\n");
-    printf("The server will start automatically.\n");
-    printf("Display window is hidden until a device connects.\n\n");
-    printf("Controls (when window is visible):\n");
-    printf("  [q] - Stop server\n");
-    printf("  [s] - Restart server\n");
-    printf("  [-] and [=] - Scale video size\n\n");
+    // Get default device name (PC name)
+    char hostName[512] = { 0 };
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+    gethostname(hostName, sizeof(hostName) - 1);
+    if (strlen(hostName) == 0) {
+        DWORD n = sizeof(hostName) - 1;
+        if (::GetComputerNameA(hostName, &n)) {
+            if (n > 0 && n < sizeof(hostName)) {
+                hostName[n] = '\0';
+            }
+        }
+    }
+    if (strlen(hostName) == 0) {
+        strcpy_s(hostName, sizeof(hostName), "AirPlay Server");
+    }
 
     CSDLPlayer player;
+    player.setServerName(hostName);
+
     if (!player.init()) {
-        printf("Failed to initialize player!\n");
         return 1;
     }
 
     player.loopEvents();
-
-    printf("AirPlay Receiver shutting down.\n");
 
     return 0;
 }
