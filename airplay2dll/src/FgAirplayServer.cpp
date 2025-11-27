@@ -121,6 +121,7 @@ int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN],
 
 void FgAirplayServer::stop()
 {
+	// First, stop accepting new connections by unregistering DNS-SD
 	if (m_pDnsSd) {
 		dnssd_unregister_airplay(m_pDnsSd);
 		dnssd_unregister_raop(m_pDnsSd);
@@ -128,6 +129,11 @@ void FgAirplayServer::stop()
 		m_pDnsSd = NULL;
 	}
 
+	// Wait a bit to let any in-flight callbacks complete
+	// This prevents crashes from callbacks accessing destroyed objects
+	Sleep(100);
+
+	// Now destroy the servers
 	if (m_pRaop) {
 		raop_destroy(m_pRaop);
 // 		raop_set_log_callback(m_pRaop, &log_callback, NULL);
@@ -140,7 +146,13 @@ void FgAirplayServer::stop()
 		m_pAirplay = NULL;
 	}
 
+	// Wait again to ensure all callbacks have finished
+	Sleep(100);
+
+	// Clear all channels
 	clearChannels();
+	
+	// Finally, clear the callback pointer
 	m_pCallback = NULL;
 }
 
@@ -204,17 +216,29 @@ void FgAirplayServer::disconnected(void* cls, const char* remoteName, const char
 	{
 		return;
 	}
+	
+	// Safely call the callback
 	if (pServer->m_pCallback != NULL)
 	{
 		pServer->m_pCallback->disconnected(remoteName, remoteDeviceId);
 	}
 
+	// Wait a bit to ensure any in-flight video/audio processing completes
+	// This prevents accessing channels that are about to be deleted
+	Sleep(50);
+
+	// Now safely remove the channel
 	CAutoLock oLock(pServer->m_mutexMap, "disconnected");
 	std::string deviceId(remoteDeviceId);
-	FgAirplayChannel* pChannel = pServer->m_mapChannel[std::string(remoteDeviceId)];
-	if (pChannel) {
-		pServer->m_mapChannel.erase(deviceId);
-		pChannel->release();
+	FgAirplayChannelMap::iterator it = pServer->m_mapChannel.find(deviceId);
+	if (it != pServer->m_mapChannel.end()) {
+		FgAirplayChannel* pChannel = it->second;
+		pServer->m_mapChannel.erase(it);
+		// Release outside the critical section to avoid holding lock too long
+		oLock.unlock();
+		if (pChannel) {
+			pChannel->release();
+		}
 	}
 }
 
@@ -243,6 +267,12 @@ void FgAirplayServer::audio_process(void* cls, pcm_data_struct* data, const char
 {
 	FgAirplayServer* pServer = (FgAirplayServer*)cls;
 	if (!pServer)
+	{
+		return;
+	}
+
+	// Check if we're shutting down before processing audio
+	if (!pServer->m_pRaop || !pServer->m_pAirplay || !pServer->m_pCallback)
 	{
 		return;
 	}
@@ -280,6 +310,13 @@ void FgAirplayServer::video_process(void* cls, h264_decode_struct* h264data, con
 	{
 		return;
 	}
+	
+	// Check if we're shutting down
+	if (!pServer->m_pRaop || !pServer->m_pAirplay)
+	{
+		return;
+	}
+	
 	if (h264data->data_len <= 0)
 	{
 		return;
@@ -305,6 +342,12 @@ void FgAirplayServer::video_process(void* cls, h264_decode_struct* h264data, con
 	FgAirplayChannel* pChannel = NULL;
 	{
 		CAutoLock oLock(pServer->m_mutexMap, "video_process");
+		// Check again inside the lock in case we're shutting down
+		if (!pServer->m_pCallback) {
+			delete[] pData->data;
+			delete pData;
+			return;
+		}
 		pChannel = pServer->getChannel(remoteDeviceId);
 		if (pChannel) {
 			pChannel->addRef();
@@ -366,17 +409,17 @@ BOOL GetMacAddress(char strMac[6])
 	AdapterInfoSize = 0;
 	Err = GetAdaptersInfo(NULL, &AdapterInfoSize);
 	if ((Err != 0) && (Err != ERROR_BUFFER_OVERFLOW)) {
-		printf("»ñµÃÍø¿¨ÐÅÏ¢Ê§°Ü!");
+		printf("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢Ê§ï¿½ï¿½!");
 		return   FALSE;
 	}
-	//   ·ÖÅäÍø¿¨ÐÅÏ¢ÄÚ´æ  
+	//   ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½Ú´ï¿½  
 	pAdapterInfo = (PIP_ADAPTER_INFO)GlobalAlloc(GPTR, AdapterInfoSize);
 	if (pAdapterInfo == NULL) {
-		printf("·ÖÅäÍø¿¨ÐÅÏ¢ÄÚ´æÊ§°Ü");
+		printf("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½Ú´ï¿½Ê§ï¿½ï¿½");
 		return   FALSE;
 	}
 	if (GetAdaptersInfo(pAdapterInfo, &AdapterInfoSize) != 0) {
-		printf("»ñµÃÍø¿¨ÐÅÏ¢Ê§°Ü!\n");
+		printf("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢Ê§ï¿½ï¿½!\n");
 		GlobalFree(pAdapterInfo);
 		return   FALSE;
 	}
