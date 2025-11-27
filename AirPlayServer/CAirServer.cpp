@@ -58,6 +58,7 @@ void CAirServer::start(CSDLPlayer* pPlayer, const char* serverName)
 
 void CAirServer::stop()
 {
+	printf("[DEBUG] Stopping server\n");
     if (m_pServer != NULL) {
         fgServerStop(m_pServer);
         m_pServer = NULL;
@@ -66,5 +67,6 @@ void CAirServer::stop()
 
 float CAirServer::setVideoScale(float fRatio)
 {
+	printf("[DEBUG] Setting video scale: %.2f\n", fRatio);
     return fgServerScale(m_pServer, fRatio);
 }
