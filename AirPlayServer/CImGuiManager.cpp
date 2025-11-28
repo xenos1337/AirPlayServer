@@ -196,6 +196,7 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	ImVec2 center = ImGui::GetMainViewport()->GetCenter();
 	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.85f); // Semi-transparent background
 	
 	ImGui::Begin("AirPlay Server", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 	
@@ -263,9 +264,9 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 		return;
 	}
 	
-	// Render overlay UI in corner
+	// Render overlay UI in corner with semi-transparent background
 	ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-	ImGui::SetNextWindowBgAlpha(0.8f);
+	ImGui::SetNextWindowBgAlpha(0.75f); // Semi-transparent for overlay
 	ImGui::Begin("AirPlay Controls", pShowUI, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
 	
 	ImGui::Text("Device: %s", deviceName ? deviceName : "Unknown");

@@ -55,13 +55,19 @@ public:
 	void requestHideWindow();  // Thread-safe: posts event to hide window
 	void requestToggleFullscreen();  // Thread-safe: posts event to toggle fullscreen
 
-	SDL_Surface* m_surface;
+	SDL_Surface* m_surface;      // Main screen surface (only touched by main thread)
+	SDL_Surface* m_videoBuffer;  // Off-screen buffer for video data (written by callback thread)
 	SDL_Overlay* m_yuv;
-	SDL_Rect m_displayRect;    // Where to display the video (centered with letterbox)
+	SDL_Rect m_displayRect;      // Where to display the video (centered with letterbox)
 	
 	// Video source dimensions (from AirPlay stream)
 	int m_videoWidth;
 	int m_videoHeight;
+	
+	// Frame timing for smooth playback
+	unsigned long long m_lastFramePTS;      // PTS of last rendered frame
+	DWORD m_lastFrameTime;                  // System time when last frame was rendered
+	bool m_hasNewFrame;                     // Flag indicating new frame is available
 	
 	// Window dimensions
 	int m_windowWidth;

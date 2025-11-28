@@ -44,6 +44,7 @@ int FilterEvents(const SDL_Event* event) {
 
 CSDLPlayer::CSDLPlayer()
 	: m_surface(NULL)
+	, m_videoBuffer(NULL)
 	, m_yuv(NULL)
 	, m_bAudioInited(false)
 	, m_bDumpAudio(false)
@@ -52,6 +53,9 @@ CSDLPlayer::CSDLPlayer()
 	, m_displayRect()
 	, m_videoWidth(0)
 	, m_videoHeight(0)
+	, m_lastFramePTS(0)
+	, m_lastFrameTime(0)
+	, m_hasNewFrame(false)
 	, m_windowWidth(800)
 	, m_windowHeight(600)
 	, m_server()
@@ -186,8 +190,15 @@ void CSDLPlayer::loopEvents()
 	BOOL bEndLoop = FALSE;
 	bool bShowUI = true;
 	
+	// Frame timing for 30 FPS cap
+	const DWORD TARGET_FRAME_TIME = 33; // 1000ms / 30fps ≈ 33.33ms, using 33ms
+	DWORD frameStartTime = 0;
+	
 	/* Main loop - poll events and render ImGui */
 	while (!bEndLoop) {
+		// Record frame start time
+		frameStartTime = GetTickCount();
+		
 		// Process all pending events
 		while (SDL_PollEvent(&event)) {
 			// Process ImGui events first
@@ -208,16 +219,33 @@ void CSDLPlayer::loopEvents()
 				unsigned int width = (unsigned int)(uintptr_t)event.user.data1;
 				unsigned int height = (unsigned int)(uintptr_t)event.user.data2;
 				if (width != m_videoWidth || height != m_videoHeight || m_yuv == NULL) {
-					// Video source size changed - recreate overlay
+					// Video source size changed - recreate overlay and video buffer
 					{
 						CAutoLock oLock(m_mutexVideo, "recreateOverlay");
 						if (m_yuv != NULL) {
 							SDL_FreeYUVOverlay(m_yuv);
 							m_yuv = NULL;
 						}
+						if (m_videoBuffer != NULL) {
+							SDL_FreeSurface(m_videoBuffer);
+							m_videoBuffer = NULL;
+						}
+						
 						m_videoWidth = width;
 						m_videoHeight = height;
 						m_yuv = SDL_CreateYUVOverlay(m_videoWidth, m_videoHeight, SDL_IYUV_OVERLAY, m_surface);
+						
+						// Create off-screen video buffer matching window size
+						// This is where the callback thread writes video data
+						if (m_surface != NULL) {
+							m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, m_windowWidth, m_windowHeight, 32,
+								m_surface->format->Rmask, m_surface->format->Gmask, 
+								m_surface->format->Bmask, m_surface->format->Amask);
+							if (m_videoBuffer != NULL) {
+								// Initialize to black
+								SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
+							}
+						}
 						
 						// Initialize overlay to black to prevent green flicker
 						if (m_yuv != NULL) {
@@ -307,25 +335,53 @@ void CSDLPlayer::loopEvents()
 			}
 		}
 		
-		// Render ImGui every frame (outside of event polling)
-		m_imgui.NewFrame(m_surface);
-		if (m_bConnected) {
-			// Connected - show overlay with controls
-			m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName);
-		} else if (m_bDisconnecting) {
-			// Disconnecting - render nothing (show black screen)
-			// Don't render any UI to hide the controls
-		} else {
-			// Disconnected - show home screen
-			m_imgui.RenderHomeScreen(m_serverName, m_bConnected, m_connectedDeviceName);
+		// MAIN THREAD: Single-threaded rendering approach with frame pacing
+		// Always render at 30 FPS to keep everything synchronized
+		{
+			CAutoLock videoLock(m_mutexVideo, "renderLoop");
+			
+			// Step 1: Blit video buffer to screen surface
+			if (m_hasNewFrame && m_videoBuffer != NULL && m_surface != NULL) {
+				// Copy entire video buffer to screen surface
+				SDL_BlitSurface(m_videoBuffer, NULL, m_surface, NULL);
+				m_hasNewFrame = false; // Mark frame as rendered
+				m_lastFrameTime = GetTickCount();
+			} else if (m_videoBuffer != NULL && m_surface != NULL) {
+				// No new frame, but blit existing video buffer (keeps video displayed)
+				SDL_BlitSurface(m_videoBuffer, NULL, m_surface, NULL);
+			} else if (m_surface != NULL) {
+				// No video yet - fill with black
+				SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
+			}
+			
+			// Step 2: Render ImGui on top of m_surface (every frame for smooth UI)
+			m_imgui.NewFrame(m_surface);
+			if (m_bConnected) {
+				// Connected - show overlay with controls
+				m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName);
+			} else if (m_bDisconnecting) {
+				// Disconnecting - render nothing (show black screen)
+				// Don't render any UI to hide the controls
+			} else {
+				// Disconnected - show home screen
+				m_imgui.RenderHomeScreen(m_serverName, m_bConnected, m_connectedDeviceName);
+			}
+			// ImGui renders with alpha blending on top of the video layer
+			m_imgui.Render(m_surface);
+			
+			// Step 3: Flip to display everything
+			SDL_Flip(m_surface);
 		}
-		m_imgui.Render(m_surface);
 		
-		// Update display - flip surface to show video + ImGui composite
-		SDL_Flip(m_surface);
+		// Frame rate limiting: Cap at 30 FPS
+		DWORD frameEndTime = GetTickCount();
+		DWORD frameTime = frameEndTime - frameStartTime;
 		
-		// Small delay to avoid maxing out CPU and prevent video processing delays
-		SDL_Delay(16); // 30 FPS
+		if (frameTime < TARGET_FRAME_TIME) {
+			// Sleep for the remaining time to maintain 30 FPS
+			SDL_Delay(TARGET_FRAME_TIME - frameTime);
+		}
+		// If frameTime >= TARGET_FRAME_TIME, we took too long - skip delay and continue
 	}
 }
 
@@ -338,10 +394,15 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	// Check if video source dimensions changed
 	if ((int)data->width != m_videoWidth || (int)data->height != m_videoHeight) {
 		{
-			CAutoLock oLock(m_mutexVideo, "unInitVideo");
+			CAutoLock oLock(m_mutexVideo, "videoSizeChange");
 			if (NULL != m_yuv) {
 				SDL_FreeYUVOverlay(m_yuv);
 				m_yuv = NULL;
+			}
+			// Also free the video buffer since dimensions changed
+			if (NULL != m_videoBuffer) {
+				SDL_FreeSurface(m_videoBuffer);
+				m_videoBuffer = NULL;
 			}
 		}
 		m_evtVideoSizeChange.type = SDL_USEREVENT;
@@ -354,19 +415,20 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		return;
 	}
 
+	// CALLBACK THREAD: Write ONLY to m_videoBuffer, NOT to m_surface
+	// The main thread will blit from m_videoBuffer to m_surface
 	CAutoLock oLock(m_mutexVideo, "outputVideo");
-	if (m_yuv == NULL) {
+	
+	// Ensure video buffer exists
+	if (m_videoBuffer == NULL) {
 		return;
 	}
-
-	// Convert YUV to RGB and draw to surface (allows ImGui compositing)
-	CAutoLock surfaceLock(m_mutexVideo, "outputVideoSurface");
 	
-	if (m_surface == NULL) return;
-	
-	// Lock surface for direct pixel access
-	if (SDL_MUSTLOCK(m_surface)) {
-		SDL_LockSurface(m_surface);
+	// Lock video buffer for direct pixel access
+	if (SDL_MUSTLOCK(m_videoBuffer)) {
+		if (SDL_LockSurface(m_videoBuffer) != 0) {
+			return; // Failed to lock, skip this frame
+		}
 	}
 	
 	// Get YUV plane pointers
@@ -378,19 +440,28 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	float scaleX = (float)data->width / m_displayRect.w;
 	float scaleY = (float)data->height / m_displayRect.h;
 	
-	// Draw scaled video to display rect area
+	// Clear entire video buffer to black first (letterbox/pillarbox)
+	Uint32 black = SDL_MapRGB(m_videoBuffer->format, 0, 0, 0);
+	for (int y = 0; y < m_videoBuffer->h; y++) {
+		Uint32* row = (Uint32*)((Uint8*)m_videoBuffer->pixels + y * m_videoBuffer->pitch);
+		for (int x = 0; x < m_videoBuffer->w; x++) {
+			row[x] = black;
+		}
+	}
+	
+	// Draw scaled video to display rect area only
 	for (int dy = 0; dy < m_displayRect.h; dy++) {
 		int screenY = m_displayRect.y + dy;
-		if (screenY < 0 || screenY >= m_surface->h) continue;
+		if (screenY < 0 || screenY >= m_videoBuffer->h) continue;
 		
 		int srcY = (int)(dy * scaleY);
 		if (srcY >= (int)data->height) srcY = data->height - 1;
 		
-		Uint32* dstRow = (Uint32*)((Uint8*)m_surface->pixels + screenY * m_surface->pitch);
+		Uint32* dstRow = (Uint32*)((Uint8*)m_videoBuffer->pixels + screenY * m_videoBuffer->pitch);
 		
 		for (int dx = 0; dx < m_displayRect.w; dx++) {
 			int screenX = m_displayRect.x + dx;
-			if (screenX < 0 || screenX >= m_surface->w) continue;
+			if (screenX < 0 || screenX >= m_videoBuffer->w) continue;
 			
 			int srcX = (int)(dx * scaleX);
 			if (srcX >= (int)data->width) srcX = data->width - 1;
@@ -404,16 +475,21 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 			Uint8 r, g, b;
 			YUVToRGB(y, u, v, &r, &g, &b);
 			
-			// Write pixel
-			dstRow[screenX] = SDL_MapRGB(m_surface->format, r, g, b);
+			// Write pixel to video buffer (NOT to screen surface)
+			dstRow[screenX] = SDL_MapRGB(m_videoBuffer->format, r, g, b);
 		}
 	}
 	
-	if (SDL_MUSTLOCK(m_surface)) {
-		SDL_UnlockSurface(m_surface);
+	if (SDL_MUSTLOCK(m_videoBuffer)) {
+		SDL_UnlockSurface(m_videoBuffer);
 	}
 	
-	// Note: Don't flip here - the main loop will flip after ImGui is drawn
+	// Store frame PTS and set new frame flag
+	m_lastFramePTS = data->pts;
+	m_hasNewFrame = true;
+	
+	// Note: Don't touch m_surface here - only the main thread does that
+	// The main loop will blit from m_videoBuffer to m_surface, then render ImGui on top
 }
 
 void CSDLPlayer::outputAudio(SFgAudioFrame* data)
@@ -448,8 +524,9 @@ void CSDLPlayer::initVideo(int width, int height)
 	m_windowWidth = width;
 	m_windowHeight = height;
 	
-	// Create resizable window with software surface
-	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_RESIZABLE);
+	// Create resizable window with double buffering to prevent flickering
+	// SDL_DOUBLEBUF enables hardware double buffering for smooth rendering
+	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
 	SDL_WM_SetCaption("AirPlay Server", NULL);
 
 	// Fill with black initially
@@ -474,14 +551,28 @@ void CSDLPlayer::resizeWindow(int width, int height)
 	// Need to recreate YUV overlay when surface changes
 	CAutoLock oLock(m_mutexVideo, "resizeWindow");
 	
-	// Free old overlay before recreating surface
+	// Free old overlay and video buffer before recreating surface
 	if (m_yuv != NULL) {
 		SDL_FreeYUVOverlay(m_yuv);
 		m_yuv = NULL;
 	}
+	if (m_videoBuffer != NULL) {
+		SDL_FreeSurface(m_videoBuffer);
+		m_videoBuffer = NULL;
+	}
 	
 	// Recreate surface with new size
-	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_RESIZABLE);
+	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
+	
+	// Recreate video buffer matching new window size
+	if (m_surface != NULL) {
+		m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
+			m_surface->format->Rmask, m_surface->format->Gmask, 
+			m_surface->format->Bmask, m_surface->format->Amask);
+		if (m_videoBuffer != NULL) {
+			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
+		}
+	}
 	
 	// Recreate YUV overlay for the new surface (if we have video)
 	if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
@@ -542,14 +633,28 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 	
 	CAutoLock oLock(m_mutexVideo, "handleLiveResize");
 	
-	// Free old overlay before recreating surface
+	// Free old overlay and video buffer before recreating surface
 	if (m_yuv != NULL) {
 		SDL_FreeYUVOverlay(m_yuv);
 		m_yuv = NULL;
 	}
+	if (m_videoBuffer != NULL) {
+		SDL_FreeSurface(m_videoBuffer);
+		m_videoBuffer = NULL;
+	}
 	
 	// Recreate surface with new size
-	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_RESIZABLE);
+	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
+	
+	// Recreate video buffer matching new window size
+	if (m_surface != NULL) {
+		m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
+			m_surface->format->Rmask, m_surface->format->Gmask, 
+			m_surface->format->Bmask, m_surface->format->Amask);
+		if (m_videoBuffer != NULL) {
+			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
+		}
+	}
 	
 	// Recreate YUV overlay for the new surface (if we have video)
 	if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
@@ -655,8 +760,12 @@ void CSDLPlayer::toggleFullscreen()
 			SDL_FreeYUVOverlay(m_yuv);
 			m_yuv = NULL;
 		}
+		if (m_videoBuffer != NULL) {
+			SDL_FreeSurface(m_videoBuffer);
+			m_videoBuffer = NULL;
+		}
 		
-		m_surface = SDL_SetVideoMode(screenWidth, screenHeight, 32, SDL_SWSURFACE | SDL_NOFRAME);
+		m_surface = SDL_SetVideoMode(screenWidth, screenHeight, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_NOFRAME);
 		if (m_surface == NULL) {
 			// Failed to create surface, restore window state
 			SetWindowLong(m_hwnd, GWL_STYLE, m_windowedStyle);
@@ -673,6 +782,14 @@ void CSDLPlayer::toggleFullscreen()
 		
 		m_windowWidth = screenWidth;
 		m_windowHeight = screenHeight;
+		
+		// Create video buffer for new screen size
+		m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, screenWidth, screenHeight, 32,
+			m_surface->format->Rmask, m_surface->format->Gmask, 
+			m_surface->format->Bmask, m_surface->format->Amask);
+		if (m_videoBuffer != NULL) {
+			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
+		}
 		
 		// Re-acquire window handle after SDL_SetVideoMode (it may have changed)
 		SDL_SysWMinfo wmInfo;
@@ -731,10 +848,24 @@ void CSDLPlayer::toggleFullscreen()
 			SDL_FreeYUVOverlay(m_yuv);
 			m_yuv = NULL;
 		}
+		if (m_videoBuffer != NULL) {
+			SDL_FreeSurface(m_videoBuffer);
+			m_videoBuffer = NULL;
+		}
 		
-		m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_RESIZABLE);
+		m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
 		m_windowWidth = width;
 		m_windowHeight = height;
+		
+		// Create video buffer for restored window size
+		if (m_surface != NULL) {
+			m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
+				m_surface->format->Rmask, m_surface->format->Gmask, 
+				m_surface->format->Bmask, m_surface->format->Amask);
+			if (m_videoBuffer != NULL) {
+				SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
+			}
+		}
 		
 		// Re-acquire window handle
 		SDL_SysWMinfo wmInfo;
@@ -821,6 +952,10 @@ void CSDLPlayer::unInitVideo()
 
 	{
 		CAutoLock oLock(m_mutexVideo, "unInitVideo");
+		if (NULL != m_videoBuffer) {
+			SDL_FreeSurface(m_videoBuffer);
+			m_videoBuffer = NULL;
+		}
 		if (NULL != m_yuv) {
 			SDL_FreeYUVOverlay(m_yuv);
 			m_yuv = NULL;
