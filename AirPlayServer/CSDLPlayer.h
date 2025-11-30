@@ -31,6 +31,7 @@ typedef std::queue<SFgVideoFrame*> SFgVideoFrameQueue;
 #define SHOW_WINDOW_CODE 2
 #define HIDE_WINDOW_CODE 3
 #define TOGGLE_FULLSCREEN_CODE 4
+#define WINDOW_RESIZE_CODE 5
 #define DOUBLE_CLICK_THRESHOLD_MS 400
 
 class CSDLPlayer
@@ -129,7 +130,10 @@ public:
 	WNDPROC m_originalWndProc;
 	static CSDLPlayer* s_instance;  // For accessing instance from static callback
 	void handleLiveResize(int width, int height);
+	void requestResize(int width, int height);  // Thread-safe: posts event to resize window
 	volatile bool m_bResizing;  // Prevent re-entrancy during resize (volatile for thread safety)
+	volatile int m_pendingResizeWidth;   // Pending resize dimensions
+	volatile int m_pendingResizeHeight;
 	
 	// Fullscreen toggle on double-click
 	void toggleFullscreen();
