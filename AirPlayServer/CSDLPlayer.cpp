@@ -1,5 +1,6 @@
 #include "CSDLPlayer.h"
 #include <stdio.h>
+#include <malloc.h>  // For _aligned_malloc/_aligned_free
 #include "CAutoLock.h"
 
 // Static instance pointer for window procedure callback
@@ -90,17 +91,40 @@ CSDLPlayer::CSDLPlayer()
 	m_totalBytes = 0;
 	m_bitrateStartTime = 0;
 	m_currentBitrateMbps = 0.0f;
+	m_frameSkipCounter = 0;
+	m_currentQualityPreset = QUALITY_BALANCED;
 
-	// Initialize scaler
+	// Initialize scaler with double-buffering
 	m_swsCtx = NULL;
 	m_scaledWidth = 0;
 	m_scaledHeight = 0;
-	m_scaledYUV[0] = NULL;
-	m_scaledYUV[1] = NULL;
-	m_scaledYUV[2] = NULL;
+	m_bScalerNeedsReinit = 0;
+	m_scaledYUV[0][0] = NULL;
+	m_scaledYUV[0][1] = NULL;
+	m_scaledYUV[0][2] = NULL;
+	m_scaledYUV[1][0] = NULL;
+	m_scaledYUV[1][1] = NULL;
+	m_scaledYUV[1][2] = NULL;
 	m_scaledPitch[0] = 0;
 	m_scaledPitch[1] = 0;
 	m_scaledPitch[2] = 0;
+	m_writeBuffer = 0;
+	m_readBuffer = 0;
+	m_bufferReady = 0;
+
+	// Initialize source buffer for scaling thread
+	m_srcYUV[0] = NULL;
+	m_srcYUV[1] = NULL;
+	m_srcYUV[2] = NULL;
+	m_srcPitch[0] = 0;
+	m_srcPitch[1] = 0;
+	m_srcPitch[2] = 0;
+	m_srcWidth = 0;
+	m_srcHeight = 0;
+	m_srcReady = 0;
+	m_scalingThread = NULL;
+	m_scalingEvent = NULL;
+	m_scalingThreadRunning = 0;
 }
 
 CSDLPlayer::~CSDLPlayer()
@@ -232,10 +256,12 @@ void CSDLPlayer::loopEvents()
 
 	BOOL bEndLoop = FALSE;
 	bool bShowUI = true;
-	
-	// Frame timing for 30 FPS cap
-	const DWORD TARGET_FRAME_TIME = 33; // 1000ms / 30fps ≈ 33.33ms, using 33ms
+
+	// Frame timing variables
 	DWORD frameStartTime = 0;
+	EQualityPreset lastQualityPreset = m_imgui.GetQualityPreset();
+	// Sync initial preset to thread-safe variable
+	InterlockedExchange(&m_currentQualityPreset, (LONG)lastQualityPreset);
 	
 	/* Main loop - poll events and render ImGui */
 	while (!bEndLoop) {
@@ -397,14 +423,14 @@ void CSDLPlayer::loopEvents()
 		}
 		
 		// MAIN THREAD: Hardware-accelerated YUV rendering with ImGui overlay
+		// Step 1: Display YUV overlay (minimize mutex hold time)
 		{
 			CAutoLock videoLock(m_mutexVideo, "renderLoop");
 
-			// Step 1: Display YUV overlay using GPU acceleration
 			if (m_hasNewFrame && m_yuv != NULL && m_surface != NULL) {
 				// Hardware-accelerated YUV->RGB conversion and scaling
 				SDL_DisplayYUVOverlay(m_yuv, &m_displayRect);
-				m_hasNewFrame = false; // Mark frame as rendered
+				m_hasNewFrame = false; // Mark frame as rendered immediately
 				m_lastFrameTime = GetTickCount();
 			} else if (m_yuv != NULL && m_surface != NULL && m_videoWidth > 0) {
 				// No new frame, but redisplay existing YUV overlay
@@ -413,8 +439,17 @@ void CSDLPlayer::loopEvents()
 				// No video yet - fill with black
 				SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
 			}
+		}
+		// Mutex released - outputVideo can now write next frame while we do ImGui
 
-			// Step 2: Render ImGui on top of m_surface (every frame for smooth UI)
+		// Step 2: Render ImGui on top of m_surface (outside mutex for less contention)
+		if (m_surface != NULL) {
+			// Check if UI was just hidden - need to clear surface to remove old UI
+			if (m_imgui.WasUIJustHidden()) {
+				// Clear the entire surface to black to remove old UI content
+				SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
+			}
+
 			m_imgui.NewFrame(m_surface);
 			if (m_bConnected) {
 				// Connected - show overlay with controls and video statistics
@@ -423,7 +458,6 @@ void CSDLPlayer::loopEvents()
 					m_totalFrames, m_droppedFrames);
 			} else if (m_bDisconnecting) {
 				// Disconnecting - render nothing (show black screen)
-				// Don't render any UI to hide the controls
 			} else {
 				// Disconnected - show home screen
 				m_imgui.RenderHomeScreen(m_serverName, m_bConnected, m_connectedDeviceName);
@@ -435,22 +469,48 @@ void CSDLPlayer::loopEvents()
 			SDL_Flip(m_surface);
 		}
 		
-		// Frame rate limiting: Cap at 30 FPS
+		// Update quality preset for callback thread (thread-safe)
+		EQualityPreset currentPreset = m_imgui.GetQualityPreset();
+
+		// If quality preset changed, signal scaler to reinitialize and update cached preset
+		if (currentPreset != lastQualityPreset) {
+			lastQualityPreset = currentPreset;
+			// Update thread-safe cached preset for callback thread
+			InterlockedExchange(&m_currentQualityPreset, (LONG)currentPreset);
+			// Set flag - the callback thread will reinit the scaler safely
+			InterlockedExchange(&m_bScalerNeedsReinit, 1);
+		}
+
+		// Display runs at full speed (~60fps) - frame skipping in outputVideo handles 30fps cap
+		// Just do minimal delay to prevent CPU spinning
 		DWORD frameEndTime = GetTickCount();
 		DWORD frameTime = frameEndTime - frameStartTime;
-		
-		if (frameTime < TARGET_FRAME_TIME) {
-			// Sleep for the remaining time to maintain 30 FPS
-			SDL_Delay(TARGET_FRAME_TIME - frameTime);
+
+		if (frameTime < 16) {
+			// Cap display at ~60fps to prevent excessive CPU usage
+			SDL_Delay(16 - frameTime);
 		}
-		// If frameTime >= TARGET_FRAME_TIME, we took too long - skip delay and continue
 	}
 }
 
-void CSDLPlayer::outputVideo(SFgVideoFrame* data) 
+void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 {
 	if (data->width == 0 || data->height == 0) {
 		return;
+	}
+
+	// Frame skipping for 30fps mode (Good Quality)
+	// Skip every other frame when in Good Quality mode to halve the frame rate
+	// Use thread-safe cached preset (updated by main thread via InterlockedExchange)
+	LONG preset = InterlockedCompareExchange(&m_currentQualityPreset, 0, 0);
+	if (preset == QUALITY_GOOD) {
+		m_frameSkipCounter++;
+		if (m_frameSkipCounter % 2 == 0) {
+			// Skip this frame - don't process it
+			// Still count bytes for bitrate calculation
+			m_totalBytes += data->dataTotalLen;
+			return;
+		}
 	}
 
 	// Check if video source dimensions changed
@@ -477,88 +537,109 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		return;
 	}
 
-	// CALLBACK THREAD: Write YUV data directly to hardware overlay for GPU acceleration
-	CAutoLock oLock(m_mutexVideo, "outputVideo");
-
-	// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
-	// This prevents frame accumulation and increasing delay over time
-	if (m_hasNewFrame) {
-		m_droppedFrames++;  // Track dropped frames
-		return;  // Skip this frame to prevent drift/accumulation
-	}
-
-	// Ensure YUV overlay exists
-	if (m_yuv == NULL) {
-		return;
-	}
-
-	// Lock YUV overlay for direct pixel access
-	if (SDL_LockYUVOverlay(m_yuv) != 0) {
-		return; // Failed to lock, skip this frame
-	}
+	// CALLBACK THREAD: Write YUV data to hardware overlay
+	// Use short mutex lock - only for overlay write, not for scaling
 
 	// Get source YUV plane pointers
 	const uint8_t* srcY = data->data;
 	const uint8_t* srcU = data->data + data->dataLen[0];
 	const uint8_t* srcV = data->data + data->dataLen[0] + data->dataLen[1];
 
-	// Check if we need to scale (display size differs from video size)
-	bool needsScaling = (m_displayRect.w != (int)data->width || m_displayRect.h != (int)data->height);
+	// SCALING/COPY PATH - all under mutex to prevent race with resize
+	{
+		CAutoLock oLock(m_mutexVideo, "outputVideo");
 
-	if (needsScaling && m_displayRect.w > 0 && m_displayRect.h > 0) {
-		// Initialize or update scaler if needed
-		initScaler(data->width, data->height, m_displayRect.w, m_displayRect.h);
+		// Read display rect inside mutex for thread safety
+		int dstW = m_displayRect.w;
+		int dstH = m_displayRect.h;
 
-		if (m_swsCtx != NULL && m_scaledYUV[0] != NULL) {
-			// Scale YUV using high-quality Lanczos filter
-			const uint8_t* srcSlice[3] = { srcY, srcU, srcV };
-			int srcStride[3] = { (int)data->pitch[0], (int)data->pitch[1], (int)data->pitch[2] };
+		// Check if we need to scale (display size differs from video size)
+		bool needsScaling = (dstW != (int)data->width || dstH != (int)data->height);
 
-			sws_scale(m_swsCtx, srcSlice, srcStride, 0, data->height,
-				m_scaledYUV, m_scaledPitch);
+		if (needsScaling && dstW > 0 && dstH > 0) {
+			// SCALING PATH
+			// Initialize/reinit scaler if needed
+			initScaler(data->width, data->height, dstW, dstH);
 
-			// Copy scaled YUV to overlay
-			for (int y = 0; y < m_displayRect.h; y++) {
-				memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
-					m_scaledYUV[0] + y * m_scaledPitch[0],
-					m_displayRect.w);
+			// Get write buffer for scaling
+			LONG writeIdx = InterlockedCompareExchange(&m_writeBuffer, 0, 0);
+			if (writeIdx < 0 || writeIdx > 1) writeIdx = 0;  // Safety check
+
+			// Verify all buffers are valid before scaling
+			if (m_swsCtx != NULL &&
+				m_scaledYUV[writeIdx][0] != NULL &&
+				m_scaledYUV[writeIdx][1] != NULL &&
+				m_scaledYUV[writeIdx][2] != NULL &&
+				srcY != NULL && srcU != NULL && srcV != NULL &&
+				data->pitch[0] > 0 && data->pitch[1] > 0 && data->pitch[2] > 0 &&
+				m_scaledWidth == dstW && m_scaledHeight == dstH) {
+
+				// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
+				if (m_hasNewFrame) {
+					m_droppedFrames++;
+				} else {
+					// Scale directly from source to our buffer
+					const uint8_t* srcSlice[3] = { srcY, srcU, srcV };
+					int srcStride[3] = { (int)data->pitch[0], (int)data->pitch[1], (int)data->pitch[2] };
+					sws_scale(m_swsCtx, srcSlice, srcStride, 0, data->height,
+						m_scaledYUV[writeIdx], m_scaledPitch);
+
+					// Copy to overlay - verify overlay dimensions match
+					if (m_yuv != NULL && m_yuv->w == dstW && m_yuv->h == dstH &&
+						SDL_LockYUVOverlay(m_yuv) == 0) {
+						// Fast bulk copy of scaled YUV to overlay
+						// Y plane - single memcpy per row
+						for (int y = 0; y < dstH; y++) {
+							memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
+								m_scaledYUV[writeIdx][0] + y * m_scaledPitch[0], dstW);
+						}
+						// U/V planes - combined loop
+						for (int y = 0; y < dstH / 2; y++) {
+							memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
+								m_scaledYUV[writeIdx][1] + y * m_scaledPitch[1], dstW / 2);
+							memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
+								m_scaledYUV[writeIdx][2] + y * m_scaledPitch[2], dstW / 2);
+						}
+
+						SDL_UnlockYUVOverlay(m_yuv);
+						m_lastFramePTS = data->pts;
+						m_hasNewFrame = true;
+
+						// Swap write buffer for next frame
+						InterlockedExchange(&m_writeBuffer, 1 - writeIdx);
+					}
+				}
 			}
-			for (int y = 0; y < m_displayRect.h / 2; y++) {
-				memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
-					m_scaledYUV[1] + y * m_scaledPitch[1],
-					m_displayRect.w / 2);
-			}
-			for (int y = 0; y < m_displayRect.h / 2; y++) {
-				memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
-					m_scaledYUV[2] + y * m_scaledPitch[2],
-					m_displayRect.w / 2);
-			}
-		}
-	} else {
-		// 1:1 pixel mapping - direct copy without scaling (crisp)
-		for (unsigned int y = 0; y < data->height; y++) {
-			memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
-				srcY + y * data->pitch[0],
-				data->width);
-		}
-		for (unsigned int y = 0; y < data->height / 2; y++) {
-			memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
-				srcU + y * data->pitch[1],
-				data->width / 2);
-		}
-		for (unsigned int y = 0; y < data->height / 2; y++) {
-			memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
-				srcV + y * data->pitch[2],
-				data->width / 2);
-		}
-	}
+		} else if (dstW > 0 && dstH > 0) {
+			// DIRECT PATH: 1:1 pixel mapping - direct copy without scaling (crisp and fast)
+			// Already inside mutex
 
-	SDL_UnlockYUVOverlay(m_yuv);
+			// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
+			if (m_hasNewFrame) {
+				m_droppedFrames++;
+			} else if (m_yuv != NULL &&
+				m_yuv->w == (int)data->width && m_yuv->h == (int)data->height &&
+				SDL_LockYUVOverlay(m_yuv) == 0) {
+				// Y plane
+				for (unsigned int y = 0; y < data->height; y++) {
+					memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
+						srcY + y * data->pitch[0], data->width);
+				}
+				// U/V planes - combined loop
+				for (unsigned int y = 0; y < data->height / 2; y++) {
+					memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
+						srcU + y * data->pitch[1], data->width / 2);
+					memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
+						srcV + y * data->pitch[2], data->width / 2);
+				}
 
-	// Store frame PTS and set new frame flag
-	m_lastFramePTS = data->pts;
-	m_hasNewFrame = true;
-	
+				SDL_UnlockYUVOverlay(m_yuv);
+				m_lastFramePTS = data->pts;
+				m_hasNewFrame = true;
+			}
+		}
+	} // End of mutex scope
+
 	// Update statistics
 	m_totalFrames++;
 	m_totalBytes += data->dataTotalLen;
@@ -1295,20 +1376,83 @@ void CSDLPlayer::resizeToVideoSize()
 	}
 }
 
+// Background scaling thread - performs sws_scale off the main thread
+// Uses INFINITE wait with proper signaling for minimal latency
+DWORD WINAPI CSDLPlayer::ScalingThreadProc(LPVOID param)
+{
+	CSDLPlayer* pThis = (CSDLPlayer*)param;
+
+	// Set thread to high priority for responsive scaling
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
+	while (InterlockedCompareExchange(&pThis->m_scalingThreadRunning, 1, 1) == 1) {
+		// Wait for signal - use short timeout to stay responsive
+		DWORD result = WaitForSingleObject(pThis->m_scalingEvent, 5);  // 5ms max wait
+
+		// Check if we should exit
+		if (InterlockedCompareExchange(&pThis->m_scalingThreadRunning, 1, 1) != 1) {
+			break;
+		}
+
+		// Process all pending frames in a tight loop (drain any backlog)
+		while (InterlockedCompareExchange(&pThis->m_srcReady, 0, 1) == 1) {
+			// We have source data to scale
+			if (pThis->m_swsCtx != NULL && pThis->m_srcYUV[0] != NULL) {
+				// Get write buffer index
+				LONG writeIdx = InterlockedCompareExchange(&pThis->m_writeBuffer, 0, 0);
+
+				// Perform scaling into back buffer (outside any mutex)
+				const uint8_t* srcSlice[3] = { pThis->m_srcYUV[0], pThis->m_srcYUV[1], pThis->m_srcYUV[2] };
+				sws_scale(pThis->m_swsCtx, srcSlice, pThis->m_srcPitch, 0, pThis->m_srcHeight,
+					pThis->m_scaledYUV[writeIdx], pThis->m_scaledPitch);
+
+				// Swap buffers atomically: write buffer becomes read buffer
+				LONG newReadIdx = writeIdx;
+				LONG newWriteIdx = 1 - writeIdx;
+				InterlockedExchange(&pThis->m_readBuffer, newReadIdx);
+				InterlockedExchange(&pThis->m_writeBuffer, newWriteIdx);
+				InterlockedExchange(&pThis->m_bufferReady, 1);
+			}
+		}
+	}
+
+	return 0;
+}
+
 void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 {
+	// Check if scaler needs to be reinitialized (quality preset changed)
+	bool forceReinit = (InterlockedCompareExchange(&m_bScalerNeedsReinit, 0, 1) == 1);
+
 	// Check if we need to recreate the scaler
-	if (m_swsCtx != NULL && m_scaledWidth == dstW && m_scaledHeight == dstH) {
+	if (!forceReinit && m_swsCtx != NULL && m_scaledWidth == dstW && m_scaledHeight == dstH &&
+		m_srcWidth == srcW && m_srcHeight == srcH) {
 		return;  // Already initialized with correct dimensions
 	}
 
 	// Free existing scaler
 	freeScaler();
 
-	// Create new scaler with high-quality Lanczos filter
+	// Determine scaling algorithm based on quality preset
+	int scalingAlgorithm;
+	EQualityPreset preset = m_imgui.GetQualityPreset();
+	switch (preset) {
+	case QUALITY_GOOD:
+		scalingAlgorithm = SWS_LANCZOS;  // Highest quality - Lanczos resampling
+		break;
+	case QUALITY_BALANCED:
+		scalingAlgorithm = SWS_FAST_BILINEAR;  // Good balance - fast bilinear
+		break;
+	case QUALITY_FAST:
+	default:
+		scalingAlgorithm = SWS_POINT;  // Fastest - nearest neighbor
+		break;
+	}
+
+	// Create new scaler with selected algorithm
 	m_swsCtx = sws_getContext(srcW, srcH, AV_PIX_FMT_YUV420P,
 		dstW, dstH, AV_PIX_FMT_YUV420P,
-		SWS_LANCZOS,  // High-quality scaling without pixelation
+		scalingAlgorithm,
 		NULL, NULL, NULL);
 
 	if (m_swsCtx == NULL) {
@@ -1317,23 +1461,34 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 
 	m_scaledWidth = dstW;
 	m_scaledHeight = dstH;
+	m_srcWidth = srcW;
+	m_srcHeight = srcH;
 
-	// Allocate scaled YUV buffers with proper alignment
-	m_scaledPitch[0] = ((dstW + 15) >> 4) << 4;        // Y pitch (16-byte aligned)
-	m_scaledPitch[1] = ((dstW / 2 + 15) >> 4) << 4;    // U pitch
+	// Allocate scaled YUV buffers with proper alignment (double-buffered)
+	m_scaledPitch[0] = ((dstW + 31) >> 5) << 5;        // Y pitch (32-byte aligned for AVX)
+	m_scaledPitch[1] = ((dstW / 2 + 31) >> 5) << 5;    // U pitch
 	m_scaledPitch[2] = m_scaledPitch[1];               // V pitch
 
 	int ySize = m_scaledPitch[0] * dstH;
 	int uvSize = m_scaledPitch[1] * (dstH / 2);
 
-	m_scaledYUV[0] = new uint8_t[ySize];
-	m_scaledYUV[1] = new uint8_t[uvSize];
-	m_scaledYUV[2] = new uint8_t[uvSize];
+	// Allocate both buffers for double-buffering
+	for (int i = 0; i < 2; i++) {
+		m_scaledYUV[i][0] = (uint8_t*)_aligned_malloc(ySize, 32);
+		m_scaledYUV[i][1] = (uint8_t*)_aligned_malloc(uvSize, 32);
+		m_scaledYUV[i][2] = (uint8_t*)_aligned_malloc(uvSize, 32);
 
-	// Initialize to black (Y=0, U=128, V=128)
-	memset(m_scaledYUV[0], 0, ySize);
-	memset(m_scaledYUV[1], 128, uvSize);
-	memset(m_scaledYUV[2], 128, uvSize);
+		// Initialize to black (Y=0, U=128, V=128)
+		if (m_scaledYUV[i][0]) memset(m_scaledYUV[i][0], 0, ySize);
+		if (m_scaledYUV[i][1]) memset(m_scaledYUV[i][1], 128, uvSize);
+		if (m_scaledYUV[i][2]) memset(m_scaledYUV[i][2], 128, uvSize);
+	}
+
+	// Initialize buffer indices
+	m_writeBuffer = 0;
+	m_readBuffer = 0;
+	m_bufferReady = 0;
+	m_bScalerNeedsReinit = 0;
 }
 
 void CSDLPlayer::freeScaler()
@@ -1343,21 +1498,26 @@ void CSDLPlayer::freeScaler()
 		m_swsCtx = NULL;
 	}
 
-	if (m_scaledYUV[0] != NULL) {
-		delete[] m_scaledYUV[0];
-		m_scaledYUV[0] = NULL;
-	}
-	if (m_scaledYUV[1] != NULL) {
-		delete[] m_scaledYUV[1];
-		m_scaledYUV[1] = NULL;
-	}
-	if (m_scaledYUV[2] != NULL) {
-		delete[] m_scaledYUV[2];
-		m_scaledYUV[2] = NULL;
+	// Free double-buffered scaled YUV planes
+	for (int i = 0; i < 2; i++) {
+		if (m_scaledYUV[i][0] != NULL) {
+			_aligned_free(m_scaledYUV[i][0]);
+			m_scaledYUV[i][0] = NULL;
+		}
+		if (m_scaledYUV[i][1] != NULL) {
+			_aligned_free(m_scaledYUV[i][1]);
+			m_scaledYUV[i][1] = NULL;
+		}
+		if (m_scaledYUV[i][2] != NULL) {
+			_aligned_free(m_scaledYUV[i][2]);
+			m_scaledYUV[i][2] = NULL;
+		}
 	}
 
 	m_scaledWidth = 0;
 	m_scaledHeight = 0;
+	m_srcWidth = 0;
+	m_srcHeight = 0;
 	m_scaledPitch[0] = 0;
 	m_scaledPitch[1] = 0;
 	m_scaledPitch[2] = 0;

@@ -84,6 +84,10 @@ public:
 	unsigned long long m_totalBytes;        // Total bytes received for bitrate calculation
 	DWORD m_bitrateStartTime;                // Start time for bitrate calculation
 	float m_currentBitrateMbps;             // Current bitrate in Mbps
+
+	// Frame skip for 30fps mode
+	unsigned int m_frameSkipCounter;        // Counter for frame skipping in Good Quality mode
+	volatile LONG m_currentQualityPreset;   // Thread-safe copy of quality preset for callback thread
 	
 	// Window dimensions
 	int m_windowWidth;
@@ -138,12 +142,31 @@ public:
 	void resizeToVideoSize();  // Resize window to match video resolution exactly
 	bool m_b1to1PixelMode;     // When true, window matches video size for no upscaling
 
-	// High-quality video scaling (for fullscreen/resized windows)
+	// High-quality video scaling with double-buffering (for fullscreen/resized windows)
 	SwsContext* m_swsCtx;          // FFmpeg scaler context
 	int m_scaledWidth;             // Current scaled output width
 	int m_scaledHeight;            // Current scaled output height
-	uint8_t* m_scaledYUV[3];       // Scaled YUV planes
-	int m_scaledPitch[3];          // Scaled YUV pitches
+	volatile LONG m_bScalerNeedsReinit;  // Flag to reinit scaler (thread-safe)
+
+	// Double-buffered scaled YUV planes for lockless producer-consumer pattern
+	// Buffer 0 = front buffer (being displayed), Buffer 1 = back buffer (being written)
+	uint8_t* m_scaledYUV[2][3];    // [buffer_index][plane] - two sets of YUV planes
+	int m_scaledPitch[3];          // Scaled YUV pitches (same for both buffers)
+	volatile LONG m_writeBuffer;   // Index of buffer currently being written to (0 or 1)
+	volatile LONG m_readBuffer;    // Index of buffer ready for reading (0 or 1)
+	volatile LONG m_bufferReady;   // Flag: 1 = new frame ready in read buffer
+
+	// Source video buffer for scaling outside mutex
+	uint8_t* m_srcYUV[3];          // Source YUV planes (copy of incoming frame)
+	int m_srcPitch[3];             // Source pitches
+	int m_srcWidth;                // Source width
+	int m_srcHeight;               // Source height
+	volatile LONG m_srcReady;      // Flag: 1 = source data ready for scaling
+	HANDLE m_scalingThread;        // Background thread for scaling
+	HANDLE m_scalingEvent;         // Event to signal scaling thread
+	volatile LONG m_scalingThreadRunning;  // Flag to control thread lifetime
+	static DWORD WINAPI ScalingThreadProc(LPVOID param);  // Scaling thread function
+
 	void initScaler(int srcW, int srcH, int dstW, int dstH);
 	void freeScaler();
 };

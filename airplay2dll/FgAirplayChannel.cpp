@@ -68,7 +68,7 @@ int FgAirplayChannel::initFFmpeg(const void* privatedata, int privatedatalen) {
 	memcpy(m_pCodecCtx->extradata, privatedata, privatedatalen);
 	m_pCodecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
 
-	// LOW LATENCY with full quality decoding (no filter skipping)
+	// LOW LATENCY with good performance
 	m_pCodecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;  // Low latency mode - output frames immediately
 	// Note: NOT using AV_CODEC_FLAG2_FAST - keep full deblocking for clean video
 	m_pCodecCtx->thread_count = 4;                   // Multi-threaded decoding
@@ -199,10 +199,9 @@ int FgAirplayChannel::scaleH264Data(SFgVideoFrame* pSrcFrame)
 	}
 	if (!m_pSwsCtx)
 	{
-		// Use SWS_LANCZOS for high-quality scaling with sharp edges
-		// SWS_LANCZOS provides the best quality for upscaling without pixelation
+		// Use SWS_BILINEAR for fast scaling with good quality
 		m_pSwsCtx = sws_getContext(pSrcFrame->width, pSrcFrame->height, AV_PIX_FMT_YUV420P,
-			nScreenWidth, nScreenHeight, AV_PIX_FMT_YUV420P, SWS_LANCZOS,
+			nScreenWidth, nScreenHeight, AV_PIX_FMT_YUV420P, SWS_BILINEAR,
 			NULL, NULL, NULL);
 	}
 	if (m_sVideoFrameScale.width != nScreenWidth || m_sVideoFrameScale.height != nScreenHeight)
