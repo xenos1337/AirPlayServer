@@ -320,11 +320,6 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	ImGui::Text("Quality Preset:");
 	ImGui::Dummy(ImVec2(0, 4.0f));
 
-	// Calculate tab bar width to center it
-	float tabWidth = contentWidth * 0.6f;
-	ImGui::SetCursorPosX((windowWidth - tabWidth) * 0.5f - padding);
-	ImGui::PushItemWidth(tabWidth);
-
 	if (ImGui::BeginTabBar("QualityPresetTabs", ImGuiTabBarFlags_None)) {
 		// Only use SetSelected once when syncing from overlay, then clear flag
 		ImGuiTabItemFlags goodFlags = (m_bNeedSyncTabs && m_qualityPreset == QUALITY_GOOD) ? ImGuiTabItemFlags_SetSelected : 0;
@@ -352,8 +347,6 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 		}
 		ImGui::EndTabBar();
 	}
-
-	ImGui::PopItemWidth();
 
 	ImGui::Dummy(ImVec2(0, 4.0f));
 	ImGui::Separator();
