@@ -1,27 +1,17 @@
-# AirPlay 2 for Windows
+# AirPlayServer - AirPlay Receiver for Windows
 
-A high-performance AirPlay 2 receiver for Windows with real-time video streaming, audio playback, and an elegant semi-transparent ImGui overlay interface.
+A high-performance AirPlay receiver for Windows with real-time video streaming and audio playback
 
-> **Note**: This is a fork of [fingergit/airplay2-win](https://github.com/fingergit/airplay2-win) updated with additional features and improvements.
+> **Note**: This is a updated version of [fingergit/airplay2-win](https://github.com/fingergit/airplay2-win)
 
 ## ✨ Features
 
-- **Full AirPlay 2 Support**: Stream video, audio, and mirror your screen from iOS/macOS devices
-- **Modern UI**: Beautiful semi-transparent ImGui overlay with real-time connection status
-- **Smooth Playback**: Optimized frame pacing at 30 FPS for stutter-free video
+- **Full AirPlay Support**: Stream video, audio, and mirror your screen from iOS/macOS devices
+- **Quality Presets**: Choose between Good Quality (30 FPS, high-quality scaling), Balanced (60 FPS, normal quality), or Fast Speed (60 FPS, low latency)
+- **Smooth Playback**: Configurable frame pacing with optimized rendering for stutter-free video
 - **Low Latency**: Hardware-accelerated YUV to RGB conversion with efficient rendering
-- **Single-Threaded Rendering**: Eliminates flickering and artifacts through proper synchronization
-- **Flexible Display**: Automatic letterbox/pillarbox support with aspect ratio preservation
-- **Fullscreen Mode**: Double-click to toggle fullscreen, or press F key
 - **Resizable Window**: Live window resizing with instant feedback
 - **Device Discovery**: Automatic mDNS/Bonjour service advertisement
-
-## 🎯 System Requirements
-
-- **OS**: Windows 10/11 (64-bit)
-- **Visual Studio**: 2022 or later
-- **Network**: iOS/macOS device and Windows PC on the same Wi-Fi network
-- **Hardware**: Any modern CPU with SSE2 support (for YUV conversion)
 
 ## 🚀 Quick Start
 
@@ -71,8 +61,18 @@ A high-performance AirPlay 2 receiver for Windows with real-time video streaming
 ```
 AirPlay Stream → Callback Thread → Video Buffer (Off-screen)
                                          ↓
-                Main Thread → Blit to Screen → ImGui Overlay → Display (30 FPS)
+                Main Thread → Blit to Screen → ImGui Overlay → Display (30/60 FPS)
 ```
+
+### Quality Presets
+
+The application offers three quality presets that balance performance and visual quality:
+
+- **Good Quality**: 30 FPS with high-quality Lanczos scaling - Best for visual quality
+- **Balanced**: 60 FPS with fast bilinear scaling - Best balance of quality and performance (default)
+- **Fast Speed**: 60 FPS with nearest-neighbor scaling - Lowest latency, best for responsiveness
+
+Quality presets can be changed in real-time from both the home screen and the overlay UI. The selection is synchronized between views for a consistent experience.
 
 ### Key Technical Features
 
@@ -105,10 +105,27 @@ airplay2-win/
 
 ## 🔧 Configuration
 
+### Device Name
+
 The server automatically uses your computer's hostname as the AirPlay device name. To customize:
 
 1. Edit the device name in the UI when the application starts
 2. Or modify `hostName` in `AirPlayServer.cpp` before building
+
+### Quality Presets
+
+You can change the quality preset at any time:
+
+- **Home Screen**: Select from the quality preset tabs before or during streaming
+- **Overlay UI**: Press `H` to show/hide the overlay, then select your preferred quality preset
+- The preset affects both frame rate (30 FPS vs 60 FPS) and scaling algorithm quality
+
+### UI Controls
+
+- **H Key**: Toggle overlay UI visibility
+- **Double-Click**: Toggle fullscreen mode
+- **F Key**: Toggle fullscreen mode
+- **Mouse Movement**: Shows cursor (auto-hides after 5 seconds of inactivity)
 
 ## 🐛 Troubleshooting
 
@@ -122,34 +139,22 @@ The server automatically uses your computer's hostname as the AirPlay device nam
 
 ## 🔬 Performance Characteristics
 
-- **Frame Rate**: Locked at 30 FPS for video and UI
-- **CPU Usage**: ~2-10% on modern CPUs (idle/streaming)
+- **Frame Rate**: Configurable 30 FPS (Good Quality) or 60 FPS (Balanced/Fast Speed)
+- **CPU Usage**: ~2-10% on modern CPUs (idle/streaming, varies by quality preset)
 - **Memory**: ~50-200 MB (varies with video resolution)
-- **Latency**: ~30-200ms (network dependent)
+- **Latency**: ~30-200ms (network dependent, lower with Fast Speed preset)
 - **Supported Resolutions**: Up to 1920x1080 (1080p)
-
-## 📚 Technical Credits
-
-This project builds upon and integrates the following open-source projects:
-
-### Core Libraries
-- [shairplay](https://github.com/juhovh/shairplay) - AirPlay protocol implementation
-- [AirplayServer](https://github.com/KqSMea8/AirplayServer) - Base server implementation
-- [mDNSResponder](https://github.com/jevinskie/mDNSResponder) - Service discovery (Bonjour)
-
-### Dependencies
-- [SDL 1.2.15](https://www.libsdl.org/) - Cross-platform multimedia library
-- [Dear ImGui](https://github.com/ocornut/imgui) - Immediate mode GUI framework
-- [FFmpeg](https://ffmpeg.org/) - Video/audio decoding libraries
-- [FDK-AAC](https://github.com/mstorsjo/fdk-aac) - AAC audio codec
-- [libplist](https://github.com/libimobiledevice/libplist) - Apple property list parser
-
-### Additional References
-- [xindawn-windows-airplay-mirroring-sdk](https://github.com/xindawndev/xindawn-windows-airplay-mirroring-sdk) - Windows integration patterns
+- **Scaling Quality**: Lanczos (Good), Bilinear (Balanced), or Nearest-Neighbor (Fast)
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
+We're open to issues, feature requests, and pull requests! We want to make this project as good as possible, and your feedback and contributions are invaluable.
+
+**How you can help:**
+- 🐛 **Report bugs**: Found an issue? Please open an issue with details about the problem
+- 💡 **Suggest features**: Have an idea for improvement? We'd love to hear it!
+- 🔧 **Submit PRs**: Code contributions are always welcome - see guidelines below
+- 📝 **Improve documentation**: Help make the project more accessible to others
 
 ### Development Guidelines
 
@@ -164,8 +169,8 @@ This project inherits licenses from its constituent libraries. Please refer to i
 
 ## 🌟 Acknowledgments
 
-Special thanks to all the open-source contributors whose work made this project possible. This Windows port would not exist without the foundation laid by the AirPlay reverse engineering community.
+Special thanks to [fingergit](https://github.com/fingergit/airplay2-win) and all the open-source contributors whose work made this project possible. This Windows port would not exist without the foundation laid by the AirPlay reverse engineering community.
 
 ---
 
-**Note**: This is an unofficial implementation of AirPlay 2. Apple, AirPlay, and related trademarks are property of Apple Inc.
+**Note**: This is an unofficial implementation of AirPlay. Apple, AirPlay, and related trademarks are property of Apple Inc.
