@@ -68,11 +68,11 @@ int FgAirplayChannel::initFFmpeg(const void* privatedata, int privatedatalen) {
 	memcpy(m_pCodecCtx->extradata, privatedata, privatedatalen);
 	m_pCodecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
 
-	// ULTRA-LOW LATENCY: Optimize decoder for speed over quality
-	m_pCodecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;  // Low latency mode
-	m_pCodecCtx->flags2 |= AV_CODEC_FLAG2_FAST;     // Fast decoding (skip loop filter)
-	m_pCodecCtx->thread_count = 4;                   // 4 threads for faster decode on multi-core
-	m_pCodecCtx->thread_type = FF_THREAD_SLICE;     // Slice-based threading (lower latency than frame-based)
+	// LOW LATENCY with full quality decoding (no filter skipping)
+	m_pCodecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;  // Low latency mode - output frames immediately
+	// Note: NOT using AV_CODEC_FLAG2_FAST - keep full deblocking for clean video
+	m_pCodecCtx->thread_count = 4;                   // Multi-threaded decoding
+	m_pCodecCtx->thread_type = FF_THREAD_SLICE;     // Slice-based threading (lower latency than frame)
 
 	int res = avcodec_open2(m_pCodecCtx, m_pCodec, NULL);
 	if (res < 0)
@@ -199,8 +199,10 @@ int FgAirplayChannel::scaleH264Data(SFgVideoFrame* pSrcFrame)
 	}
 	if (!m_pSwsCtx)
 	{
+		// Use SWS_LANCZOS for high-quality scaling with sharp edges
+		// SWS_LANCZOS provides the best quality for upscaling without pixelation
 		m_pSwsCtx = sws_getContext(pSrcFrame->width, pSrcFrame->height, AV_PIX_FMT_YUV420P,
-			nScreenWidth, nScreenHeight, AV_PIX_FMT_YUV420P, SWS_BICUBIC /*SWS_POINT*/,
+			nScreenWidth, nScreenHeight, AV_PIX_FMT_YUV420P, SWS_LANCZOS,
 			NULL, NULL, NULL);
 	}
 	if (m_sVideoFrameScale.width != nScreenWidth || m_sVideoFrameScale.height != nScreenHeight)

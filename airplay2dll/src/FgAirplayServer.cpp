@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "FgAirplayServer.h"
 #include "Airplay2Head.h"
 #include <thread>
@@ -411,16 +411,17 @@ BOOL GetMacAddress(char strMac[6])
 	AdapterInfoSize = 0;
 	Err = GetAdaptersInfo(NULL, &AdapterInfoSize);
 	if ((Err != 0) && (Err != ERROR_BUFFER_OVERFLOW)) {
-		printf("Get Mac Address failed!");
+		printf("���������Ϣʧ��!");
 		return   FALSE;
 	}
+	//   ����������Ϣ�ڴ�  
 	pAdapterInfo = (PIP_ADAPTER_INFO)GlobalAlloc(GPTR, AdapterInfoSize);
 	if (pAdapterInfo == NULL) {
-		printf("Get Mac Address memory allocation failed");
+		printf("����������Ϣ�ڴ�ʧ��");
 		return   FALSE;
 	}
 	if (GetAdaptersInfo(pAdapterInfo, &AdapterInfoSize) != 0) {
-		printf("Get Mac Address information failed!\n");
+		printf("���������Ϣʧ��!\n");
 		GlobalFree(pAdapterInfo);
 		return   FALSE;
 	}
