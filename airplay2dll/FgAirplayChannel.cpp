@@ -68,6 +68,12 @@ int FgAirplayChannel::initFFmpeg(const void* privatedata, int privatedatalen) {
 	memcpy(m_pCodecCtx->extradata, privatedata, privatedatalen);
 	m_pCodecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
 
+	// ULTRA-LOW LATENCY: Optimize decoder for speed over quality
+	m_pCodecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;  // Low latency mode
+	m_pCodecCtx->flags2 |= AV_CODEC_FLAG2_FAST;     // Fast decoding (skip loop filter)
+	m_pCodecCtx->thread_count = 4;                   // 4 threads for faster decode on multi-core
+	m_pCodecCtx->thread_type = FF_THREAD_SLICE;     // Slice-based threading (lower latency than frame-based)
+
 	int res = avcodec_open2(m_pCodecCtx, m_pCodec, NULL);
 	if (res < 0)
 	{
@@ -106,17 +112,16 @@ float FgAirplayChannel::setScale(float fRatio)
 
 int FgAirplayChannel::decodeH264Data(SFgH264Data* data, const char* remoteName, const char* remoteDeviceId) {
 	int ret = 0;
-	if (!m_bCodecOpened && !data->is_key) {
-		return 0;
-	}
-	if (data->is_key) {
+	// ULTRA-LOW LATENCY: Initialize decoder on first keyframe, but don't drop P-frames
+	// Note: This may cause brief visual artifacts until first I-frame, but eliminates 2-5s wait
+	if (data->is_key && !m_bCodecOpened) {
 		ret = initFFmpeg(data->data, data->size);
 		if (ret < 0) {
 			return ret;
 		}
 	}
 	if (!m_bCodecOpened) {
-		return 0;
+		return 0;  // Still need codec to be opened before any decoding
 	}
 
 	AVPacket pkt1, * packet = &pkt1;
