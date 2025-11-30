@@ -129,7 +129,7 @@ public:
 	WNDPROC m_originalWndProc;
 	static CSDLPlayer* s_instance;  // For accessing instance from static callback
 	void handleLiveResize(int width, int height);
-	bool m_bResizing;  // Prevent re-entrancy during resize
+	volatile bool m_bResizing;  // Prevent re-entrancy during resize (volatile for thread safety)
 	
 	// Fullscreen toggle on double-click
 	void toggleFullscreen();
@@ -137,6 +137,11 @@ public:
 	RECT m_windowedRect;      // Saved windowed position/size
 	LONG m_windowedStyle;     // Saved windowed style
 	LONG m_windowedExStyle;   // Saved windowed extended style
+
+	// Cursor auto-hide after inactivity
+	DWORD m_lastMouseMoveTime;  // Time of last mouse movement
+	bool m_bCursorHidden;       // Whether cursor is currently hidden
+	static const DWORD CURSOR_HIDE_DELAY_MS = 5000;  // Hide after 5 seconds
 
 	// 1:1 pixel mode - resize window to match video for crisp rendering
 	void resizeToVideoSize();  // Resize window to match video resolution exactly

@@ -68,6 +68,8 @@ CSDLPlayer::CSDLPlayer()
 	, m_windowedRect()
 	, m_windowedStyle(0)
 	, m_windowedExStyle(0)
+	, m_lastMouseMoveTime(0)
+	, m_bCursorHidden(false)
 {
 	ZeroMemory(&m_sAudioFmt, sizeof(SFgAudioFrame));
 	ZeroMemory(&m_displayRect, sizeof(SDL_Rect));
@@ -262,6 +264,9 @@ void CSDLPlayer::loopEvents()
 	EQualityPreset lastQualityPreset = m_imgui.GetQualityPreset();
 	// Sync initial preset to thread-safe variable
 	InterlockedExchange(&m_currentQualityPreset, (LONG)lastQualityPreset);
+
+	// Initialize cursor hide timer
+	m_lastMouseMoveTime = GetTickCount();
 	
 	/* Main loop - poll events and render ImGui */
 	while (!bEndLoop) {
@@ -273,8 +278,17 @@ void CSDLPlayer::loopEvents()
 			// Process ImGui events first
 			m_imgui.ProcessEvent(&event);
 			
+			// Track mouse movement for cursor auto-hide
+			if (event.type == SDL_MOUSEMOTION) {
+				m_lastMouseMoveTime = GetTickCount();
+				if (m_bCursorHidden) {
+					SDL_ShowCursor(SDL_ENABLE);
+					m_bCursorHidden = false;
+				}
+			}
+
 			// Skip application event processing if ImGui wants to capture it
-			if (m_imgui.WantCaptureMouse() && (event.type == SDL_MOUSEMOTION || 
+			if (m_imgui.WantCaptureMouse() && (event.type == SDL_MOUSEMOTION ||
 				event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP)) {
 				continue;
 			}
@@ -423,6 +437,12 @@ void CSDLPlayer::loopEvents()
 		}
 		
 		// MAIN THREAD: Hardware-accelerated YUV rendering with ImGui overlay
+		// Skip rendering during resize to prevent accessing freed resources
+		if (m_bResizing) {
+			SDL_Delay(10);  // Small delay during resize
+			continue;
+		}
+
 		// Step 1: Display YUV overlay (minimize mutex hold time)
 		{
 			CAutoLock videoLock(m_mutexVideo, "renderLoop");
@@ -469,6 +489,15 @@ void CSDLPlayer::loopEvents()
 			SDL_Flip(m_surface);
 		}
 		
+		// Auto-hide cursor after 5 seconds of inactivity
+		if (!m_bCursorHidden && m_lastMouseMoveTime > 0) {
+			DWORD elapsed = GetTickCount() - m_lastMouseMoveTime;
+			if (elapsed >= CURSOR_HIDE_DELAY_MS) {
+				SDL_ShowCursor(SDL_DISABLE);
+				m_bCursorHidden = true;
+			}
+		}
+
 		// Update quality preset for callback thread (thread-safe)
 		EQualityPreset currentPreset = m_imgui.GetQualityPreset();
 
@@ -496,6 +525,11 @@ void CSDLPlayer::loopEvents()
 void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 {
 	if (data->width == 0 || data->height == 0) {
+		return;
+	}
+
+	// Skip video processing during resize to prevent race conditions
+	if (m_bResizing) {
 		return;
 	}
 
@@ -548,6 +582,11 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	// SCALING/COPY PATH - all under mutex to prevent race with resize
 	{
 		CAutoLock oLock(m_mutexVideo, "outputVideo");
+
+		// Double-check resize flag inside mutex (may have changed since pre-mutex check)
+		if (m_bResizing) {
+			return;
+		}
 
 		// Read display rect inside mutex for thread safety
 		int dstW = m_displayRect.w;
@@ -839,21 +878,25 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 	// Recreate surface with new size
 	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
 
+	// If surface creation failed, abort resize
+	if (m_surface == NULL) {
+		m_bResizing = false;
+		return;
+	}
+
 	// Recreate video buffer matching new window size
-	if (m_surface != NULL) {
-		m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
-			m_surface->format->Rmask, m_surface->format->Gmask,
-			m_surface->format->Bmask, m_surface->format->Amask);
-		if (m_videoBuffer != NULL) {
-			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
-		}
+	m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
+		m_surface->format->Rmask, m_surface->format->Gmask,
+		m_surface->format->Bmask, m_surface->format->Amask);
+	if (m_videoBuffer != NULL) {
+		SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 	}
 
 	// Recalculate display rect for new window size (needed for overlay size)
 	calculateDisplayRect();
 
 	// Recreate YUV overlay at display rect size for high-quality scaling
-	if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
+	if (m_videoWidth > 0 && m_videoHeight > 0) {
 		int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
 		int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
 
@@ -869,6 +912,19 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 		}
 	}
 
+	// Re-acquire window handle after SDL_SetVideoMode (it may create a new window)
+	SDL_SysWMinfo wmInfo;
+	SDL_VERSION(&wmInfo.version);
+	if (SDL_GetWMInfo(&wmInfo) == 1) {
+		HWND newHwnd = wmInfo.window;
+		if (newHwnd != m_hwnd) {
+			m_hwnd = newHwnd;
+			LONG_PTR classStyle = GetClassLongPtr(m_hwnd, GCL_STYLE);
+			SetClassLongPtr(m_hwnd, GCL_STYLE, classStyle | CS_DBLCLKS);
+			m_originalWndProc = (WNDPROC)SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)WindowProc);
+		}
+	}
+
 	// Redraw - clear to black, video will be redrawn next frame
 	if (m_surface != NULL) {
 		SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
@@ -881,17 +937,23 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 // Custom window procedure for live resize and double-click fullscreen
 LRESULT CALLBACK CSDLPlayer::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-	if (s_instance == NULL || s_instance->m_originalWndProc == NULL) {
+	if (s_instance == NULL) {
 		return DefWindowProc(hwnd, msg, wParam, lParam);
 	}
-	
+
+	// Safety check: if this is for an old window handle, use default proc
+	if (hwnd != s_instance->m_hwnd || s_instance->m_originalWndProc == NULL) {
+		return DefWindowProc(hwnd, msg, wParam, lParam);
+	}
+
 	switch (msg) {
 		case WM_SIZE: {
 			// WM_SIZE fires during resize with the new client area size
 			if (wParam != SIZE_MINIMIZED) {
 				int width = LOWORD(lParam);
 				int height = HIWORD(lParam);
-				if (width > 0 && height > 0) {
+				// Minimum size check to prevent issues with tiny windows
+				if (width >= 100 && height >= 100) {
 					s_instance->handleLiveResize(width, height);
 				}
 			}
@@ -903,7 +965,7 @@ LRESULT CALLBACK CSDLPlayer::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 			return 0;
 		}
 	}
-	
+
 	return CallWindowProc(s_instance->m_originalWndProc, hwnd, msg, wParam, lParam);
 }
 
