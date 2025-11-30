@@ -5,9 +5,15 @@
 #include "SDL.h"
 #include "SDL_thread.h"
 #include "SDL_syswm.h"
-#undef main 
+#undef main
 #include "CAirServer.h"
 #include "CImGuiManager.h"
+
+// FFmpeg for high-quality video scaling
+extern "C" {
+#include <libswscale/swscale.h>
+#include <libavutil/imgutils.h>
+}
 
 typedef void sdlAudioCallback(void* userdata, Uint8* stream, int len);
 
@@ -69,6 +75,16 @@ public:
 	DWORD m_lastFrameTime;                  // System time when last frame was rendered
 	bool m_hasNewFrame;                     // Flag indicating new frame is available
 	
+	// Video statistics
+	unsigned long long m_totalFrames;       // Total frames received
+	unsigned long long m_droppedFrames;     // Frames dropped due to queue full
+	DWORD m_fpsStartTime;                   // Start time for FPS calculation
+	unsigned int m_fpsFrameCount;           // Frame count for FPS calculation
+	float m_currentFPS;                     // Current FPS
+	unsigned long long m_totalBytes;        // Total bytes received for bitrate calculation
+	DWORD m_bitrateStartTime;                // Start time for bitrate calculation
+	float m_currentBitrateMbps;             // Current bitrate in Mbps
+	
 	// Window dimensions
 	int m_windowWidth;
 	int m_windowHeight;
@@ -117,5 +133,18 @@ public:
 	RECT m_windowedRect;      // Saved windowed position/size
 	LONG m_windowedStyle;     // Saved windowed style
 	LONG m_windowedExStyle;   // Saved windowed extended style
+
+	// 1:1 pixel mode - resize window to match video for crisp rendering
+	void resizeToVideoSize();  // Resize window to match video resolution exactly
+	bool m_b1to1PixelMode;     // When true, window matches video size for no upscaling
+
+	// High-quality video scaling (for fullscreen/resized windows)
+	SwsContext* m_swsCtx;          // FFmpeg scaler context
+	int m_scaledWidth;             // Current scaled output width
+	int m_scaledHeight;            // Current scaled output height
+	uint8_t* m_scaledYUV[3];       // Scaled YUV planes
+	int m_scaledPitch[3];          // Scaled YUV pitches
+	void initScaler(int srcW, int srcH, int dstW, int dstH);
+	void freeScaler();
 };
 

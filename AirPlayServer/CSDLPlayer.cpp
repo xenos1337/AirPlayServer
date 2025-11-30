@@ -76,9 +76,31 @@ CSDLPlayer::CSDLPlayer()
 	m_bConnected = false;
 	m_bDisconnecting = false;
 	m_dwDisconnectStartTime = 0;
+	m_b1to1PixelMode = true;  // Enable 1:1 pixel mode by default for crisp video
 	m_mutexAudio = CreateMutex(NULL, FALSE, NULL);
 	m_mutexVideo = CreateMutex(NULL, FALSE, NULL);
 	s_instance = this;
+	
+	// Initialize video statistics
+	m_totalFrames = 0;
+	m_droppedFrames = 0;
+	m_fpsStartTime = 0;
+	m_fpsFrameCount = 0;
+	m_currentFPS = 0.0f;
+	m_totalBytes = 0;
+	m_bitrateStartTime = 0;
+	m_currentBitrateMbps = 0.0f;
+
+	// Initialize scaler
+	m_swsCtx = NULL;
+	m_scaledWidth = 0;
+	m_scaledHeight = 0;
+	m_scaledYUV[0] = NULL;
+	m_scaledYUV[1] = NULL;
+	m_scaledYUV[2] = NULL;
+	m_scaledPitch[0] = 0;
+	m_scaledPitch[1] = 0;
+	m_scaledPitch[2] = 0;
 }
 
 CSDLPlayer::~CSDLPlayer()
@@ -87,12 +109,13 @@ CSDLPlayer::~CSDLPlayer()
 	if (m_hwnd != NULL && m_originalWndProc != NULL) {
 		SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)m_originalWndProc);
 	}
-	
+
+	freeScaler();
 	unInit();
 
 	CloseHandle(m_mutexAudio);
 	CloseHandle(m_mutexVideo);
-	
+
 	s_instance = NULL;
 }
 
@@ -165,6 +188,26 @@ void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 		// Start the disconnect transition to show black screen
 		m_bDisconnecting = true;
 		m_dwDisconnectStartTime = GetTickCount();
+		
+		// Reset statistics on disconnect
+		m_totalFrames = 0;
+		m_droppedFrames = 0;
+		m_fpsStartTime = 0;
+		m_fpsFrameCount = 0;
+		m_currentFPS = 0.0f;
+		m_totalBytes = 0;
+		m_bitrateStartTime = 0;
+		m_currentBitrateMbps = 0.0f;
+	} else if (!m_bConnected && connected) {
+		// Reset statistics when connecting
+		m_totalFrames = 0;
+		m_droppedFrames = 0;
+		m_fpsStartTime = 0;
+		m_fpsFrameCount = 0;
+		m_currentFPS = 0.0f;
+		m_totalBytes = 0;
+		m_bitrateStartTime = 0;
+		m_currentBitrateMbps = 0.0f;
 	}
 	
 	m_bConnected = connected;
@@ -230,23 +273,41 @@ void CSDLPlayer::loopEvents()
 							SDL_FreeSurface(m_videoBuffer);
 							m_videoBuffer = NULL;
 						}
-						
+						// Free scaler when video size changes
+						freeScaler();
+
 						m_videoWidth = width;
 						m_videoHeight = height;
-						m_yuv = SDL_CreateYUVOverlay(m_videoWidth, m_videoHeight, SDL_IYUV_OVERLAY, m_surface);
-						
+					}
+
+					// 1:1 pixel mode: resize window to match video for crisp rendering
+					if (m_b1to1PixelMode && !m_bFullscreen) {
+						resizeToVideoSize();
+					}
+
+					// Calculate display rect first (needed for overlay size)
+					calculateDisplayRect();
+
+					// Now create overlay at display rect size for high-quality scaling
+					// When window matches video (1:1), displayRect matches video size
+					// When window differs, displayRect is the scaled size
+					{
+						CAutoLock oLock(m_mutexVideo, "createOverlay");
+						int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
+						int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+
+						m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
+
 						// Create off-screen video buffer matching window size
-						// This is where the callback thread writes video data
 						if (m_surface != NULL) {
 							m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, m_windowWidth, m_windowHeight, 32,
-								m_surface->format->Rmask, m_surface->format->Gmask, 
+								m_surface->format->Rmask, m_surface->format->Gmask,
 								m_surface->format->Bmask, m_surface->format->Amask);
 							if (m_videoBuffer != NULL) {
-								// Initialize to black
 								SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 							}
 						}
-						
+
 						// Initialize overlay to black to prevent green flicker
 						if (m_yuv != NULL) {
 							SDL_LockYUVOverlay(m_yuv);
@@ -256,7 +317,7 @@ void CSDLPlayer::loopEvents()
 							SDL_UnlockYUVOverlay(m_yuv);
 						}
 					}
-					calculateDisplayRect();
+
 					clearToBlack();
 				}
 			}
@@ -356,8 +417,10 @@ void CSDLPlayer::loopEvents()
 			// Step 2: Render ImGui on top of m_surface (every frame for smooth UI)
 			m_imgui.NewFrame(m_surface);
 			if (m_bConnected) {
-				// Connected - show overlay with controls
-				m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName);
+				// Connected - show overlay with controls and video statistics
+				m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName,
+					m_videoWidth, m_videoHeight, m_currentFPS, m_currentBitrateMbps,
+					m_totalFrames, m_droppedFrames);
 			} else if (m_bDisconnecting) {
 				// Disconnecting - render nothing (show black screen)
 				// Don't render any UI to hide the controls
@@ -420,6 +483,7 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
 	// This prevents frame accumulation and increasing delay over time
 	if (m_hasNewFrame) {
+		m_droppedFrames++;  // Track dropped frames
 		return;  // Skip this frame to prevent drift/accumulation
 	}
 
@@ -433,31 +497,60 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		return; // Failed to lock, skip this frame
 	}
 
-	// FAST PATH: Simple memcpy of YUV planes to overlay (GPU handles conversion & scaling)
 	// Get source YUV plane pointers
-	const Uint8* srcY = data->data;
-	const Uint8* srcU = data->data + data->dataLen[0];
-	const Uint8* srcV = data->data + data->dataLen[0] + data->dataLen[1];
+	const uint8_t* srcY = data->data;
+	const uint8_t* srcU = data->data + data->dataLen[0];
+	const uint8_t* srcV = data->data + data->dataLen[0] + data->dataLen[1];
 
-	// Copy Y plane
-	for (unsigned int y = 0; y < data->height; y++) {
-		memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
-		       srcY + y * data->pitch[0],
-		       data->width);
-	}
+	// Check if we need to scale (display size differs from video size)
+	bool needsScaling = (m_displayRect.w != (int)data->width || m_displayRect.h != (int)data->height);
 
-	// Copy U plane (half resolution)
-	for (unsigned int y = 0; y < data->height / 2; y++) {
-		memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
-		       srcU + y * data->pitch[1],
-		       data->width / 2);
-	}
+	if (needsScaling && m_displayRect.w > 0 && m_displayRect.h > 0) {
+		// Initialize or update scaler if needed
+		initScaler(data->width, data->height, m_displayRect.w, m_displayRect.h);
 
-	// Copy V plane (half resolution)
-	for (unsigned int y = 0; y < data->height / 2; y++) {
-		memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
-		       srcV + y * data->pitch[2],
-		       data->width / 2);
+		if (m_swsCtx != NULL && m_scaledYUV[0] != NULL) {
+			// Scale YUV using high-quality Lanczos filter
+			const uint8_t* srcSlice[3] = { srcY, srcU, srcV };
+			int srcStride[3] = { (int)data->pitch[0], (int)data->pitch[1], (int)data->pitch[2] };
+
+			sws_scale(m_swsCtx, srcSlice, srcStride, 0, data->height,
+				m_scaledYUV, m_scaledPitch);
+
+			// Copy scaled YUV to overlay
+			for (int y = 0; y < m_displayRect.h; y++) {
+				memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
+					m_scaledYUV[0] + y * m_scaledPitch[0],
+					m_displayRect.w);
+			}
+			for (int y = 0; y < m_displayRect.h / 2; y++) {
+				memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
+					m_scaledYUV[1] + y * m_scaledPitch[1],
+					m_displayRect.w / 2);
+			}
+			for (int y = 0; y < m_displayRect.h / 2; y++) {
+				memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
+					m_scaledYUV[2] + y * m_scaledPitch[2],
+					m_displayRect.w / 2);
+			}
+		}
+	} else {
+		// 1:1 pixel mapping - direct copy without scaling (crisp)
+		for (unsigned int y = 0; y < data->height; y++) {
+			memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
+				srcY + y * data->pitch[0],
+				data->width);
+		}
+		for (unsigned int y = 0; y < data->height / 2; y++) {
+			memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
+				srcU + y * data->pitch[1],
+				data->width / 2);
+		}
+		for (unsigned int y = 0; y < data->height / 2; y++) {
+			memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
+				srcV + y * data->pitch[2],
+				data->width / 2);
+		}
 	}
 
 	SDL_UnlockYUVOverlay(m_yuv);
@@ -465,6 +558,35 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	// Store frame PTS and set new frame flag
 	m_lastFramePTS = data->pts;
 	m_hasNewFrame = true;
+	
+	// Update statistics
+	m_totalFrames++;
+	m_totalBytes += data->dataTotalLen;
+	
+	// Calculate FPS and bitrate (update every second)
+	DWORD currentTime = SDL_GetTicks();
+	if (m_fpsStartTime == 0) {
+		m_fpsStartTime = currentTime;
+		m_bitrateStartTime = currentTime;
+	}
+	
+	m_fpsFrameCount++;
+	
+	// Update FPS every second
+	if (currentTime - m_fpsStartTime >= 1000) {
+		m_currentFPS = (float)m_fpsFrameCount * 1000.0f / (float)(currentTime - m_fpsStartTime);
+		m_fpsFrameCount = 0;
+		m_fpsStartTime = currentTime;
+	}
+	
+	// Update bitrate every second
+	static unsigned long long lastTotalBytes = 0;
+	if (currentTime - m_bitrateStartTime >= 1000) {
+		unsigned long long bytesDelta = m_totalBytes - lastTotalBytes;
+		m_currentBitrateMbps = (float)(bytesDelta * 8) / (1000.0f * 1000.0f); // Convert to Mbps
+		lastTotalBytes = m_totalBytes;
+		m_bitrateStartTime = currentTime;
+	}
 }
 
 void CSDLPlayer::outputAudio(SFgAudioFrame* data)
@@ -536,7 +658,7 @@ void CSDLPlayer::resizeWindow(int width, int height)
 	// Need to recreate YUV overlay when surface changes
 	CAutoLock oLock(m_mutexVideo, "resizeWindow");
 	
-	// Free old overlay and video buffer before recreating surface
+	// Free old overlay, video buffer and scaler before recreating surface
 	if (m_yuv != NULL) {
 		SDL_FreeYUVOverlay(m_yuv);
 		m_yuv = NULL;
@@ -545,24 +667,31 @@ void CSDLPlayer::resizeWindow(int width, int height)
 		SDL_FreeSurface(m_videoBuffer);
 		m_videoBuffer = NULL;
 	}
-	
+	freeScaler();  // Free scaler since display rect will change
+
 	// Recreate surface with new size
 	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
-	
+
 	// Recreate video buffer matching new window size
 	if (m_surface != NULL) {
 		m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
-			m_surface->format->Rmask, m_surface->format->Gmask, 
+			m_surface->format->Rmask, m_surface->format->Gmask,
 			m_surface->format->Bmask, m_surface->format->Amask);
 		if (m_videoBuffer != NULL) {
 			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 		}
 	}
-	
-	// Recreate YUV overlay for the new surface (if we have video)
+
+	// Recalculate display rect for new window size (needed for overlay size)
+	calculateDisplayRect();
+
+	// Recreate YUV overlay at display rect size for high-quality scaling
 	if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
-		m_yuv = SDL_CreateYUVOverlay(m_videoWidth, m_videoHeight, SDL_IYUV_OVERLAY, m_surface);
-		
+		int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
+		int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+
+		m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
+
 		// Initialize overlay to black (Y=0, U=128, V=128) to prevent green flicker
 		if (m_yuv != NULL) {
 			SDL_LockYUVOverlay(m_yuv);
@@ -572,7 +701,7 @@ void CSDLPlayer::resizeWindow(int width, int height)
 			SDL_UnlockYUVOverlay(m_yuv);
 		}
 	}
-	
+
 	// Re-acquire window handle
 	SDL_SysWMinfo wmInfo;
 	SDL_VERSION(&wmInfo.version);
@@ -584,14 +713,11 @@ void CSDLPlayer::resizeWindow(int width, int height)
 			m_originalWndProc = (WNDPROC)SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)WindowProc);
 		}
 	}
-	
-	// Recalculate display rect for new window size
-	calculateDisplayRect();
-	
+
 	// Clear to black - video will be redrawn next frame
 	clearToBlack();
 	SDL_Flip(m_surface);
-	
+
 	m_bResizing = false;
 }
 
@@ -602,23 +728,23 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 	if (m_bResizing) {
 		return;
 	}
-	
+
 	if (width <= 0 || height <= 0) {
 		return;
 	}
-	
+
 	if (width == m_windowWidth && height == m_windowHeight) {
 		return;
 	}
-	
+
 	m_bResizing = true;
-	
+
 	m_windowWidth = width;
 	m_windowHeight = height;
-	
+
 	CAutoLock oLock(m_mutexVideo, "handleLiveResize");
-	
-	// Free old overlay and video buffer before recreating surface
+
+	// Free old overlay, video buffer and scaler before recreating surface
 	if (m_yuv != NULL) {
 		SDL_FreeYUVOverlay(m_yuv);
 		m_yuv = NULL;
@@ -627,24 +753,31 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 		SDL_FreeSurface(m_videoBuffer);
 		m_videoBuffer = NULL;
 	}
-	
+	freeScaler();  // Free scaler since display rect will change
+
 	// Recreate surface with new size
 	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
-	
+
 	// Recreate video buffer matching new window size
 	if (m_surface != NULL) {
 		m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
-			m_surface->format->Rmask, m_surface->format->Gmask, 
+			m_surface->format->Rmask, m_surface->format->Gmask,
 			m_surface->format->Bmask, m_surface->format->Amask);
 		if (m_videoBuffer != NULL) {
 			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 		}
 	}
-	
-	// Recreate YUV overlay for the new surface (if we have video)
+
+	// Recalculate display rect for new window size (needed for overlay size)
+	calculateDisplayRect();
+
+	// Recreate YUV overlay at display rect size for high-quality scaling
 	if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
-		m_yuv = SDL_CreateYUVOverlay(m_videoWidth, m_videoHeight, SDL_IYUV_OVERLAY, m_surface);
-		
+		int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
+		int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+
+		m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
+
 		// Initialize overlay to black (Y=0, U=128, V=128) to prevent green flicker
 		if (m_yuv != NULL) {
 			SDL_LockYUVOverlay(m_yuv);
@@ -654,16 +787,13 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 			SDL_UnlockYUVOverlay(m_yuv);
 		}
 	}
-	
-	// Recalculate display rect
-	calculateDisplayRect();
-	
+
 	// Redraw - clear to black, video will be redrawn next frame
 	if (m_surface != NULL) {
 		SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
 		SDL_Flip(m_surface);
 	}
-	
+
 	m_bResizing = false;
 }
 
@@ -749,7 +879,8 @@ void CSDLPlayer::toggleFullscreen()
 			SDL_FreeSurface(m_videoBuffer);
 			m_videoBuffer = NULL;
 		}
-		
+		freeScaler();  // Free scaler since display rect will change
+
 		m_surface = SDL_SetVideoMode(screenWidth, screenHeight, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_NOFRAME);
 		if (m_surface == NULL) {
 			// Failed to create surface, restore window state
@@ -759,23 +890,23 @@ void CSDLPlayer::toggleFullscreen()
 			int height = m_windowedRect.bottom - m_windowedRect.top;
 			if (width <= 0) width = 800;
 			if (height <= 0) height = 600;
-			SetWindowPos(m_hwnd, HWND_NOTOPMOST, m_windowedRect.left, m_windowedRect.top, 
+			SetWindowPos(m_hwnd, HWND_NOTOPMOST, m_windowedRect.left, m_windowedRect.top,
 				width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 			m_bResizing = false;
 			return;
 		}
-		
+
 		m_windowWidth = screenWidth;
 		m_windowHeight = screenHeight;
-		
+
 		// Create video buffer for new screen size
 		m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, screenWidth, screenHeight, 32,
-			m_surface->format->Rmask, m_surface->format->Gmask, 
+			m_surface->format->Rmask, m_surface->format->Gmask,
 			m_surface->format->Bmask, m_surface->format->Amask);
 		if (m_videoBuffer != NULL) {
 			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 		}
-		
+
 		// Re-acquire window handle after SDL_SetVideoMode (it may have changed)
 		SDL_SysWMinfo wmInfo;
 		SDL_VERSION(&wmInfo.version);
@@ -787,17 +918,24 @@ void CSDLPlayer::toggleFullscreen()
 				LONG_PTR classStyle = GetClassLongPtr(m_hwnd, GCL_STYLE);
 				SetClassLongPtr(m_hwnd, GCL_STYLE, classStyle | CS_DBLCLKS);
 				m_originalWndProc = (WNDPROC)SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)WindowProc);
-				
+
 				// Re-apply borderless style in case SDL reset it
 				SetWindowLong(m_hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
 				SetWindowLong(m_hwnd, GWL_EXSTYLE, WS_EX_APPWINDOW);
-				SetWindowPos(m_hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, 
+				SetWindowPos(m_hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
 					screenWidth, screenHeight, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 			}
 		}
-		
+
+		// Recalculate display rect for fullscreen
+		calculateDisplayRect();
+
+		// Create overlay at display rect size for high-quality scaling
 		if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
-			m_yuv = SDL_CreateYUVOverlay(m_videoWidth, m_videoHeight, SDL_IYUV_OVERLAY, m_surface);
+			int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
+			int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+
+			m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
 			if (m_yuv != NULL) {
 				SDL_LockYUVOverlay(m_yuv);
 				memset(m_yuv->pixels[0], 0, m_yuv->pitches[0] * m_yuv->h);
@@ -806,27 +944,26 @@ void CSDLPlayer::toggleFullscreen()
 				SDL_UnlockYUVOverlay(m_yuv);
 			}
 		}
-		
-		calculateDisplayRect();
+
 		clearToBlack();
 		SDL_Flip(m_surface);
-		
+
 		m_bFullscreen = true;
 	}
 	else {
 		// Restore window style
 		SetWindowLong(m_hwnd, GWL_STYLE, m_windowedStyle);
 		SetWindowLong(m_hwnd, GWL_EXSTYLE, m_windowedExStyle);
-		
+
 		int width = m_windowedRect.right - m_windowedRect.left;
 		int height = m_windowedRect.bottom - m_windowedRect.top;
 		if (width <= 0) width = 800;
 		if (height <= 0) height = 600;
-		
+
 		SetWindowPos(m_hwnd, HWND_NOTOPMOST,
 			m_windowedRect.left, m_windowedRect.top, width, height,
 			SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-		
+
 		// Resize SDL surface back
 		CAutoLock oLock(m_mutexVideo, "toggleFullscreen");
 		if (m_yuv != NULL) {
@@ -837,21 +974,22 @@ void CSDLPlayer::toggleFullscreen()
 			SDL_FreeSurface(m_videoBuffer);
 			m_videoBuffer = NULL;
 		}
-		
+		freeScaler();  // Free scaler since display rect will change
+
 		m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
 		m_windowWidth = width;
 		m_windowHeight = height;
-		
+
 		// Create video buffer for restored window size
 		if (m_surface != NULL) {
 			m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
-				m_surface->format->Rmask, m_surface->format->Gmask, 
+				m_surface->format->Rmask, m_surface->format->Gmask,
 				m_surface->format->Bmask, m_surface->format->Amask);
 			if (m_videoBuffer != NULL) {
 				SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 			}
 		}
-		
+
 		// Re-acquire window handle
 		SDL_SysWMinfo wmInfo;
 		SDL_VERSION(&wmInfo.version);
@@ -864,9 +1002,16 @@ void CSDLPlayer::toggleFullscreen()
 				m_originalWndProc = (WNDPROC)SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)WindowProc);
 			}
 		}
-		
+
+		// Recalculate display rect for windowed mode
+		calculateDisplayRect();
+
+		// Create overlay at display rect size for high-quality scaling
 		if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
-			m_yuv = SDL_CreateYUVOverlay(m_videoWidth, m_videoHeight, SDL_IYUV_OVERLAY, m_surface);
+			int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
+			int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+
+			m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
 			if (m_yuv != NULL) {
 				SDL_LockYUVOverlay(m_yuv);
 				memset(m_yuv->pixels[0], 0, m_yuv->pitches[0] * m_yuv->h);
@@ -875,8 +1020,7 @@ void CSDLPlayer::toggleFullscreen()
 				SDL_UnlockYUVOverlay(m_yuv);
 			}
 		}
-		
-		calculateDisplayRect();
+
 		clearToBlack();
 		SDL_Flip(m_surface);
 		
@@ -896,13 +1040,23 @@ void CSDLPlayer::calculateDisplayRect()
 		m_displayRect.h = m_windowHeight;
 		return;
 	}
-	
+
+	// Check for exact 1:1 pixel mapping (no scaling needed)
+	if (m_windowWidth == m_videoWidth && m_windowHeight == m_videoHeight) {
+		// Perfect 1:1 mapping - no interpolation blur
+		m_displayRect.x = 0;
+		m_displayRect.y = 0;
+		m_displayRect.w = m_videoWidth;
+		m_displayRect.h = m_videoHeight;
+		return;
+	}
+
 	// Calculate aspect ratios
 	float videoAspect = (float)m_videoWidth / (float)m_videoHeight;
 	float windowAspect = (float)m_windowWidth / (float)m_windowHeight;
-	
+
 	int displayWidth, displayHeight;
-	
+
 	if (videoAspect > windowAspect) {
 		// Video is wider than window - fit to width (letterbox top/bottom)
 		displayWidth = m_windowWidth;
@@ -912,7 +1066,7 @@ void CSDLPlayer::calculateDisplayRect()
 		displayHeight = m_windowHeight;
 		displayWidth = (int)(m_windowHeight * videoAspect);
 	}
-	
+
 	// Center the display rect
 	m_displayRect.x = (m_windowWidth - displayWidth) / 2;
 	m_displayRect.y = (m_windowHeight - displayHeight) / 2;
@@ -1097,4 +1251,114 @@ void CSDLPlayer::requestToggleFullscreen()
 	evt.user.data1 = NULL;
 	evt.user.data2 = NULL;
 	SDL_PushEvent(&evt);
+}
+
+void CSDLPlayer::resizeToVideoSize()
+{
+	// Resize window to exactly match video resolution for 1:1 pixel mapping (no upscaling blur)
+	if (m_videoWidth <= 0 || m_videoHeight <= 0) {
+		return;
+	}
+
+	if (m_bFullscreen) {
+		return;  // Don't resize in fullscreen mode
+	}
+
+	if (m_windowWidth == m_videoWidth && m_windowHeight == m_videoHeight) {
+		return;  // Already 1:1
+	}
+
+	// Resize window to match video exactly
+	resizeWindow(m_videoWidth, m_videoHeight);
+
+	// Also update the Windows window size
+	if (m_hwnd != NULL) {
+		// Calculate window size including borders
+		RECT rect = { 0, 0, m_videoWidth, m_videoHeight };
+		AdjustWindowRectEx(&rect, GetWindowLong(m_hwnd, GWL_STYLE), FALSE, GetWindowLong(m_hwnd, GWL_EXSTYLE));
+		int windowWidth = rect.right - rect.left;
+		int windowHeight = rect.bottom - rect.top;
+
+		// Center on screen
+		HMONITOR hMonitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+		if (hMonitor != NULL) {
+			MONITORINFO mi;
+			mi.cbSize = sizeof(MONITORINFO);
+			if (GetMonitorInfo(hMonitor, &mi)) {
+				int screenWidth = mi.rcWork.right - mi.rcWork.left;
+				int screenHeight = mi.rcWork.bottom - mi.rcWork.top;
+				int x = mi.rcWork.left + (screenWidth - windowWidth) / 2;
+				int y = mi.rcWork.top + (screenHeight - windowHeight) / 2;
+				SetWindowPos(m_hwnd, NULL, x, y, windowWidth, windowHeight, SWP_NOZORDER);
+			}
+		}
+	}
+}
+
+void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
+{
+	// Check if we need to recreate the scaler
+	if (m_swsCtx != NULL && m_scaledWidth == dstW && m_scaledHeight == dstH) {
+		return;  // Already initialized with correct dimensions
+	}
+
+	// Free existing scaler
+	freeScaler();
+
+	// Create new scaler with high-quality Lanczos filter
+	m_swsCtx = sws_getContext(srcW, srcH, AV_PIX_FMT_YUV420P,
+		dstW, dstH, AV_PIX_FMT_YUV420P,
+		SWS_LANCZOS,  // High-quality scaling without pixelation
+		NULL, NULL, NULL);
+
+	if (m_swsCtx == NULL) {
+		return;
+	}
+
+	m_scaledWidth = dstW;
+	m_scaledHeight = dstH;
+
+	// Allocate scaled YUV buffers with proper alignment
+	m_scaledPitch[0] = ((dstW + 15) >> 4) << 4;        // Y pitch (16-byte aligned)
+	m_scaledPitch[1] = ((dstW / 2 + 15) >> 4) << 4;    // U pitch
+	m_scaledPitch[2] = m_scaledPitch[1];               // V pitch
+
+	int ySize = m_scaledPitch[0] * dstH;
+	int uvSize = m_scaledPitch[1] * (dstH / 2);
+
+	m_scaledYUV[0] = new uint8_t[ySize];
+	m_scaledYUV[1] = new uint8_t[uvSize];
+	m_scaledYUV[2] = new uint8_t[uvSize];
+
+	// Initialize to black (Y=0, U=128, V=128)
+	memset(m_scaledYUV[0], 0, ySize);
+	memset(m_scaledYUV[1], 128, uvSize);
+	memset(m_scaledYUV[2], 128, uvSize);
+}
+
+void CSDLPlayer::freeScaler()
+{
+	if (m_swsCtx != NULL) {
+		sws_freeContext(m_swsCtx);
+		m_swsCtx = NULL;
+	}
+
+	if (m_scaledYUV[0] != NULL) {
+		delete[] m_scaledYUV[0];
+		m_scaledYUV[0] = NULL;
+	}
+	if (m_scaledYUV[1] != NULL) {
+		delete[] m_scaledYUV[1];
+		m_scaledYUV[1] = NULL;
+	}
+	if (m_scaledYUV[2] != NULL) {
+		delete[] m_scaledYUV[2];
+		m_scaledYUV[2] = NULL;
+	}
+
+	m_scaledWidth = 0;
+	m_scaledHeight = 0;
+	m_scaledPitch[0] = 0;
+	m_scaledPitch[1] = 0;
+	m_scaledPitch[2] = 0;
 }
