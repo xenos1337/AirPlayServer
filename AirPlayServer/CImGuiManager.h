@@ -18,7 +18,9 @@ public:
 
 	// UI rendering
 	void RenderHomeScreen(const char* deviceName, bool isConnected, const char* connectedDeviceName);
-	void RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName);
+	void RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName,
+		int videoWidth = 0, int videoHeight = 0, float fps = 0.0f, float bitrateMbps = 0.0f,
+		unsigned long long totalFrames = 0, unsigned long long droppedFrames = 0);
 
 	// Input handling
 	bool WantCaptureMouse() const { return ImGui::GetIO().WantCaptureMouse; }

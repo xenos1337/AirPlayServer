@@ -37,6 +37,9 @@ bool CImGuiManager::Init(SDL_Surface* surface)
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 	
+	// Configure font atlas for better quality
+	io.Fonts->TexGlyphPadding = 1;  // Padding between glyphs for crisp rendering
+	
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
 	SetupStyle();
@@ -71,13 +74,17 @@ bool CImGuiManager::Init(SDL_Surface* surface)
 			// Create a fresh font config with default constructor, then set flags
 			ImFontConfig fontConfig;
 			fontConfig.Flags = ImFontFlags_NoLoadError;
-			// Improve font rendering quality
-			fontConfig.OversampleH = 3;  // Higher oversampling for better quality
-			fontConfig.OversampleV = 1;  // Vertical oversampling
-			fontConfig.PixelSnapH = true;  // Snap to pixel boundaries
+			// High quality font rendering with proper oversampling
+			fontConfig.OversampleH = 3;  // 3x horizontal oversampling for sharp edges
+			fontConfig.OversampleV = 2;  // 2x vertical oversampling
+			fontConfig.PixelSnapH = false;  // Disable snap to allow sub-pixel positioning with oversampling
+			fontConfig.PixelSnapV = false;
 			fontConfig.RasterizerMultiply = 1.0f;  // Normal brightness
-			
-			font = io.Fonts->AddFontFromFileTTF(fontPaths[i], 17.0f, &fontConfig, NULL);
+			fontConfig.GlyphOffset.x = 0.0f;  // No horizontal offset
+			fontConfig.GlyphOffset.y = 0.0f;  // No vertical offset
+
+			// Compact font size
+			font = io.Fonts->AddFontFromFileTTF(fontPaths[i], 16.0f, &fontConfig, NULL);
 		}
 	}
 	
@@ -228,59 +235,114 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	if (!m_bInitialized) {
 		return;
 	}
-	
+
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiIO& io = ImGui::GetIO();
-	
+
+	// Calculate window size: 75% of screen width and height
+	float screenWidth = io.DisplaySize.x;
+	float screenHeight = io.DisplaySize.y;
+
+	float windowWidth, windowHeight;
+	if (screenWidth > 0 && screenHeight > 0) {
+		windowWidth = screenWidth * 0.75f;
+		windowHeight = screenHeight * 0.75f;
+	} else {
+		// Fallback if display size unavailable
+		windowWidth = 1440.0f;
+		windowHeight = 810.0f;
+	}
+
 	// Center the window
 	ImVec2 center = ImGui::GetMainViewport()->GetCenter();
 	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_Always);
-	ImGui::SetNextWindowBgAlpha(0.85f); // Semi-transparent background
-	
-	ImGui::Begin("AirPlay Server", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
-	
+	ImGui::SetNextWindowSize(ImVec2(windowWidth, windowHeight), ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.95f);
+
+	// Push minimal styling for home screen
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+
+	ImGui::Begin("AirPlay Server", NULL,
+		ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+
+	// Calculate content area for centering
+	float contentWidth = windowWidth - 16.0f;
+	float padding = 8.0f;
+
+	// Title section - centered
+	float titleWidth = ImGui::CalcTextSize("AirPlay Receiver").x;
+	ImGui::SetCursorPosX((windowWidth - titleWidth) * 0.5f - padding);
+	ImGui::Text("AirPlay Receiver");
+
+	ImGui::Dummy(ImVec2(0, 4.0f));
+	ImGui::Separator();
+	ImGui::Dummy(ImVec2(0, 4.0f));
+
+	// Device name input - centered
+	ImGui::SetCursorPosX((windowWidth - contentWidth * 0.4f) * 0.5f - padding);
 	ImGui::Text("Device Name:");
-	ImGui::SameLine();
-	
+
 	// Copy device name to buffer if not editing
 	if (!m_bEditingDeviceName && strlen(m_deviceNameBuffer) == 0) {
 		if (deviceName) {
 			strncpy_s(m_deviceNameBuffer, sizeof(m_deviceNameBuffer), deviceName, _TRUNCATE);
 		}
 	}
-	
+
+	ImGui::SetCursorPosX((windowWidth - contentWidth * 0.4f) * 0.5f - padding);
+	ImGui::PushItemWidth(contentWidth * 0.4f);
 	if (ImGui::InputText("##DeviceName", m_deviceNameBuffer, sizeof(m_deviceNameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
 		m_bEditingDeviceName = false;
 	}
+	ImGui::PopItemWidth();
 	m_bEditingDeviceName = ImGui::IsItemActive();
-	
-	ImGui::Spacing();
+
+	ImGui::Dummy(ImVec2(0, 4.0f));
 	ImGui::Separator();
-	ImGui::Spacing();
-	
-	// Connection status
-	if (isConnected) {
-		ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Status: Connected");
-		if (connectedDeviceName) {
-			ImGui::Text("Connected from: %s", connectedDeviceName);
-		}
-	} else {
-		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Status: Waiting for connection...");
+	ImGui::Dummy(ImVec2(0, 4.0f));
+
+	// Connection status - centered
+	const char* statusText = isConnected ? "Connected" : "Waiting for connection...";
+	ImVec4 statusColor = isConnected ? ImVec4(0.2f, 0.9f, 0.3f, 1.0f) : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+	float statusWidth = ImGui::CalcTextSize(statusText).x;
+	ImGui::SetCursorPosX((windowWidth - statusWidth) * 0.5f - padding);
+	ImGui::TextColored(statusColor, "%s", statusText);
+
+	if (isConnected && connectedDeviceName) {
+		char connText[512];
+		snprintf(connText, sizeof(connText), "Streaming from: %s", connectedDeviceName);
+		float connWidth = ImGui::CalcTextSize(connText).x;
+		ImGui::SetCursorPosX((windowWidth - connWidth) * 0.5f - padding);
+		ImGui::Text("%s", connText);
 	}
-	
-	ImGui::Spacing();
+
+	ImGui::Dummy(ImVec2(0, 4.0f));
 	ImGui::Separator();
-	ImGui::Spacing();
-	
-	// Instructions
-	ImGui::TextWrapped("This device is ready to receive AirPlay connections.");
-	ImGui::TextWrapped("Look for \"%s\" in your device's AirPlay menu.", m_deviceNameBuffer[0] ? m_deviceNameBuffer : deviceName);
-	
+	ImGui::Dummy(ImVec2(0, 4.0f));
+
+	// Instructions - centered
+	const char* instruction1 = "This device is ready to receive AirPlay connections.";
+	float inst1Width = ImGui::CalcTextSize(instruction1).x;
+	ImGui::SetCursorPosX((windowWidth - inst1Width) * 0.5f - padding);
+	ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", instruction1);
+
+	char instruction2[512];
+	snprintf(instruction2, sizeof(instruction2), "Look for \"%s\" in your device's AirPlay menu.",
+		m_deviceNameBuffer[0] ? m_deviceNameBuffer : deviceName);
+	float inst2Width = ImGui::CalcTextSize(instruction2).x;
+	ImGui::SetCursorPosX((windowWidth - inst2Width) * 0.5f - padding);
+	ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", instruction2);
+
 	ImGui::End();
+	ImGui::PopStyleVar(3);
 }
 
-void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName)
+void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName,
+	int videoWidth, int videoHeight, float fps, float bitrateMbps,
+	unsigned long long totalFrames, unsigned long long droppedFrames)
 {
 	if (!m_bInitialized) {
 		return;
@@ -306,18 +368,55 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 	
 	// Render overlay UI in corner with semi-transparent background
 	ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-	ImGui::SetNextWindowBgAlpha(0.75f); // Semi-transparent for overlay
+	ImGui::SetNextWindowBgAlpha(0.85f); // Semi-transparent for overlay
 	ImGui::Begin("AirPlay Controls", pShowUI, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
 	
 	ImGui::Text("Device: %s", deviceName ? deviceName : "Unknown");
 	
 	if (isConnected) {
-		ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Connected");
+		ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "Connected");
 		if (connectedDeviceName) {
 			ImGui::Text("From: %s", connectedDeviceName);
 		}
+		
+		// Display video statistics when streaming
+		if (videoWidth > 0 && videoHeight > 0) {
+			ImGui::Separator();
+			ImGui::Text("Video Information:");
+			ImGui::Text("Resolution: %d x %d", videoWidth, videoHeight);
+			
+			if (fps > 0.0f) {
+				ImGui::Text("Frame Rate: %.2f FPS", fps);
+			} else {
+				ImGui::Text("Frame Rate: Calculating...");
+			}
+			
+			if (bitrateMbps > 0.0f) {
+				ImGui::Text("Bitrate: %.2f Mbps", bitrateMbps);
+			} else {
+				ImGui::Text("Bitrate: Calculating...");
+			}
+			
+			ImGui::Text("Total Frames: %llu", totalFrames);
+			
+			if (droppedFrames > 0) {
+				ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Dropped Frames: %llu", droppedFrames);
+			} else {
+				ImGui::Text("Dropped Frames: %llu", droppedFrames);
+			}
+			
+			// Calculate aspect ratio
+			float aspectRatio = (float)videoWidth / (float)videoHeight;
+			ImGui::Text("Aspect Ratio: %.2f:1", aspectRatio);
+			
+			// Calculate total data received
+			unsigned long long totalMB = totalFrames > 0 ? (unsigned long long)(bitrateMbps * 1000.0f * 1000.0f / 8.0f * (totalFrames / (fps > 0 ? fps : 30.0f)) / (1024 * 1024)) : 0;
+			if (totalMB > 0) {
+				ImGui::Text("Data Received: ~%llu MB", totalMB);
+			}
+		}
 	} else {
-		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Waiting...");
+		ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Waiting...");
 	}
 	
 	ImGui::Separator();
@@ -496,20 +595,40 @@ void CImGuiManager::Render(SDL_Surface* surface)
 							if (isTextured) {
 								float u = w0 * v0.uv.x + w1 * v1.uv.x + w2 * v2.uv.x;
 								float v = w0 * v0.uv.y + w1 * v1.uv.y + w2 * v2.uv.y;
-								
-								// Convert UV to texel coordinates (floor for nearest sampling)
-								int tx = (int)floorf(u * fontWidth);
-								int ty = (int)floorf(v * fontHeight);
-								
+
+								// Convert UV to texel coordinates with bilinear filtering for smooth text
+								float tx = u * fontWidth - 0.5f;
+								float ty = v * fontHeight - 0.5f;
+
+								int tx0 = (int)floorf(tx);
+								int ty0 = (int)floorf(ty);
+								int tx1 = tx0 + 1;
+								int ty1 = ty0 + 1;
+
+								float fx = tx - tx0;
+								float fy = ty - ty0;
+
 								// Clamp to texture bounds
-								if (tx < 0) tx = 0;
-								if (ty < 0) ty = 0;
-								if (tx >= fontWidth) tx = fontWidth - 1;
-								if (ty >= fontHeight) ty = fontHeight - 1;
-								
-								unsigned char* texel = fontPixels + (ty * fontWidth + tx) * 4;
+								if (tx0 < 0) tx0 = 0;
+								if (ty0 < 0) ty0 = 0;
+								if (tx1 >= fontWidth) tx1 = fontWidth - 1;
+								if (ty1 >= fontHeight) ty1 = fontHeight - 1;
+								if (tx0 >= fontWidth) tx0 = fontWidth - 1;
+								if (ty0 >= fontHeight) ty0 = fontHeight - 1;
+
+								// Sample 4 texels for bilinear interpolation
+								unsigned char* t00 = fontPixels + (ty0 * fontWidth + tx0) * 4;
+								unsigned char* t10 = fontPixels + (ty0 * fontWidth + tx1) * 4;
+								unsigned char* t01 = fontPixels + (ty1 * fontWidth + tx0) * 4;
+								unsigned char* t11 = fontPixels + (ty1 * fontWidth + tx1) * 4;
+
+								// Bilinear interpolation of alpha channel
+								float a00 = t00[3], a10 = t10[3], a01 = t01[3], a11 = t11[3];
+								float texAlpha = a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) +
+								                 a01 * (1 - fx) * fy + a11 * fx * fy;
+
 								// Multiply alpha by texture alpha
-								finalA = (Uint8)((finalA * texel[3]) / 255);
+								finalA = (Uint8)((finalA * (int)texAlpha) / 255);
 							}
 							
 							if (finalA > 0) {
@@ -549,16 +668,16 @@ void CImGuiManager::SetupStyle()
 	style.TreeLinesRounding = 2.0f;
 	style.DragDropTargetRounding = 4.0f;
 	
-	// Modern padding and spacing - tighter for cleaner look
-	style.WindowPadding = ImVec2(8.0f, 8.0f);
-	style.FramePadding = ImVec2(6.0f, 4.0f);
-	style.CellPadding = ImVec2(4.0f, 2.0f);
-	style.ItemSpacing = ImVec2(6.0f, 4.0f);
-	style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
+	// Minimal padding and spacing
+	style.WindowPadding = ImVec2(6.0f, 6.0f);
+	style.FramePadding = ImVec2(4.0f, 2.0f);
+	style.CellPadding = ImVec2(2.0f, 1.0f);
+	style.ItemSpacing = ImVec2(4.0f, 2.0f);
+	style.ItemInnerSpacing = ImVec2(2.0f, 2.0f);
 	style.TouchExtraPadding = ImVec2(0.0f, 0.0f);
-	style.SeparatorTextPadding = ImVec2(8.0f, 4.0f);
-	style.DisplayWindowPadding = ImVec2(19.0f, 19.0f);
-	style.DisplaySafeAreaPadding = ImVec2(3.0f, 3.0f);
+	style.SeparatorTextPadding = ImVec2(4.0f, 2.0f);
+	style.DisplayWindowPadding = ImVec2(8.0f, 8.0f);
+	style.DisplaySafeAreaPadding = ImVec2(2.0f, 2.0f);
 	
 	// Borders and sizes
 	style.WindowBorderSize = 1.0f;
@@ -572,11 +691,11 @@ void CImGuiManager::SetupStyle()
 	style.SeparatorTextBorderSize = 1.0f;
 	
 	// Spacing and sizing
-	style.IndentSpacing = 18.0f;
-	style.ColumnsMinSpacing = 6.0f;
-	style.ScrollbarSize = 12.0f;
+	style.IndentSpacing = 14.0f;
+	style.ColumnsMinSpacing = 4.0f;
+	style.ScrollbarSize = 10.0f;
 	style.ScrollbarPadding = 0.0f;
-	style.GrabMinSize = 8.0f;
+	style.GrabMinSize = 6.0f;
 	style.LogSliderDeadzone = 4.0f;
 	style.TabMinWidthBase = 20.0f;
 	style.TabMinWidthShrink = 0.0f;
@@ -621,73 +740,73 @@ void CImGuiManager::SetupStyle()
 	// Text colors
 	colors[ImGuiCol_Text]                   = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
 	colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
-	colors[ImGuiCol_TextLink]               = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-	colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.26f, 0.59f, 0.98f, 0.35f);
-	
+	colors[ImGuiCol_TextLink]               = ImVec4(0.70f, 0.70f, 0.70f, 1.00f);
+	colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.45f, 0.45f, 0.45f, 0.35f);
+
 	// Window colors
 	colors[ImGuiCol_WindowBg]               = ImVec4(0.08f, 0.08f, 0.08f, 0.95f);
 	colors[ImGuiCol_ChildBg]                = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
 	colors[ImGuiCol_PopupBg]                = ImVec4(0.10f, 0.10f, 0.10f, 0.95f);
-	
+
 	// Border colors
-	colors[ImGuiCol_Border]                 = ImVec4(0.30f, 0.30f, 0.35f, 0.50f);
+	colors[ImGuiCol_Border]                 = ImVec4(0.30f, 0.30f, 0.30f, 0.50f);
 	colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-	
+
 	// Frame colors
-	colors[ImGuiCol_FrameBg]                = ImVec4(0.18f, 0.18f, 0.22f, 0.54f);
-	colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.26f, 0.59f, 0.98f, 0.40f);
-	colors[ImGuiCol_FrameBgActive]          = ImVec4(0.26f, 0.59f, 0.98f, 0.67f);
-	
+	colors[ImGuiCol_FrameBg]                = ImVec4(0.18f, 0.18f, 0.18f, 0.54f);
+	colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.35f, 0.35f, 0.35f, 0.40f);
+	colors[ImGuiCol_FrameBgActive]          = ImVec4(0.45f, 0.45f, 0.45f, 0.67f);
+
 	// Title bar colors
 	colors[ImGuiCol_TitleBg]                = ImVec4(0.06f, 0.06f, 0.06f, 1.00f);
-	colors[ImGuiCol_TitleBgActive]          = ImVec4(0.16f, 0.29f, 0.48f, 1.00f);
+	colors[ImGuiCol_TitleBgActive]          = ImVec4(0.16f, 0.16f, 0.16f, 1.00f);
 	colors[ImGuiCol_TitleBgCollapsed]       = ImVec4(0.00f, 0.00f, 0.00f, 0.51f);
-	
+
 	// Menu bar
 	colors[ImGuiCol_MenuBarBg]              = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
-	
+
 	// Scrollbar colors
 	colors[ImGuiCol_ScrollbarBg]            = ImVec4(0.02f, 0.02f, 0.02f, 0.53f);
 	colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.31f, 0.31f, 0.31f, 1.00f);
 	colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.41f, 0.41f, 0.41f, 1.00f);
 	colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.51f, 0.51f, 0.51f, 1.00f);
-	
+
 	// Checkbox and slider
-	colors[ImGuiCol_CheckMark]              = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-	colors[ImGuiCol_SliderGrab]             = ImVec4(0.24f, 0.52f, 0.88f, 1.00f);
-	colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-	
+	colors[ImGuiCol_CheckMark]              = ImVec4(0.80f, 0.80f, 0.80f, 1.00f);
+	colors[ImGuiCol_SliderGrab]             = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+	colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
+
 	// Button colors
-	colors[ImGuiCol_Button]                 = ImVec4(0.26f, 0.59f, 0.98f, 0.40f);
-	colors[ImGuiCol_ButtonHovered]          = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-	colors[ImGuiCol_ButtonActive]           = ImVec4(0.06f, 0.53f, 0.98f, 1.00f);
-	
+	colors[ImGuiCol_Button]                 = ImVec4(0.30f, 0.30f, 0.30f, 0.40f);
+	colors[ImGuiCol_ButtonHovered]          = ImVec4(0.40f, 0.40f, 0.40f, 0.80f);
+	colors[ImGuiCol_ButtonActive]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+
 	// Header colors (for selectable, tree nodes, etc.)
-	colors[ImGuiCol_Header]                 = ImVec4(0.26f, 0.59f, 0.98f, 0.31f);
-	colors[ImGuiCol_HeaderHovered]          = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-	colors[ImGuiCol_HeaderActive]           = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-	
+	colors[ImGuiCol_Header]                 = ImVec4(0.30f, 0.30f, 0.30f, 0.31f);
+	colors[ImGuiCol_HeaderHovered]          = ImVec4(0.40f, 0.40f, 0.40f, 0.80f);
+	colors[ImGuiCol_HeaderActive]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+
 	// Separator colors
-	colors[ImGuiCol_Separator]              = ImVec4(0.30f, 0.30f, 0.35f, 0.50f);
-	colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.10f, 0.40f, 0.75f, 0.78f);
-	colors[ImGuiCol_SeparatorActive]        = ImVec4(0.10f, 0.40f, 0.75f, 1.00f);
-	
+	colors[ImGuiCol_Separator]              = ImVec4(0.30f, 0.30f, 0.30f, 0.50f);
+	colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.45f, 0.45f, 0.45f, 0.78f);
+	colors[ImGuiCol_SeparatorActive]        = ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
+
 	// Resize grip colors
-	colors[ImGuiCol_ResizeGrip]             = ImVec4(0.26f, 0.59f, 0.98f, 0.20f);
-	colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.26f, 0.59f, 0.98f, 0.67f);
-	colors[ImGuiCol_ResizeGripActive]       = ImVec4(0.26f, 0.59f, 0.98f, 0.95f);
+	colors[ImGuiCol_ResizeGrip]             = ImVec4(0.40f, 0.40f, 0.40f, 0.20f);
+	colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.50f, 0.50f, 0.50f, 0.67f);
+	colors[ImGuiCol_ResizeGripActive]       = ImVec4(0.60f, 0.60f, 0.60f, 0.95f);
 	
 	// Input text
 	colors[ImGuiCol_InputTextCursor]        = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
 	
 	// Tab colors
-	colors[ImGuiCol_Tab]                    = ImVec4(0.18f, 0.35f, 0.58f, 0.86f);
-	colors[ImGuiCol_TabHovered]             = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-	colors[ImGuiCol_TabSelected]            = ImVec4(0.20f, 0.41f, 0.68f, 1.00f);
-	colors[ImGuiCol_TabSelectedOverline]    = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-	colors[ImGuiCol_TabDimmed]              = ImVec4(0.07f, 0.10f, 0.15f, 0.97f);
-	colors[ImGuiCol_TabDimmedSelected]       = ImVec4(0.14f, 0.26f, 0.42f, 1.00f);
-	colors[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.50f, 0.50f, 0.50f, 0.00f);
+	colors[ImGuiCol_Tab]                    = ImVec4(0.20f, 0.20f, 0.20f, 0.86f);
+	colors[ImGuiCol_TabHovered]             = ImVec4(0.35f, 0.35f, 0.35f, 0.80f);
+	colors[ImGuiCol_TabSelected]            = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
+	colors[ImGuiCol_TabSelectedOverline]    = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+	colors[ImGuiCol_TabDimmed]              = ImVec4(0.10f, 0.10f, 0.10f, 0.97f);
+	colors[ImGuiCol_TabDimmedSelected]       = ImVec4(0.18f, 0.18f, 0.18f, 1.00f);
+	colors[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.40f, 0.40f, 0.40f, 0.00f);
 	
 	// Plot colors
 	colors[ImGuiCol_PlotLines]              = ImVec4(0.61f, 0.61f, 0.61f, 1.00f);
@@ -696,21 +815,21 @@ void CImGuiManager::SetupStyle()
 	colors[ImGuiCol_PlotHistogramHovered]   = ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
 	
 	// Table colors
-	colors[ImGuiCol_TableHeaderBg]          = ImVec4(0.19f, 0.19f, 0.20f, 1.00f);
-	colors[ImGuiCol_TableBorderStrong]      = ImVec4(0.31f, 0.31f, 0.35f, 1.00f);
-	colors[ImGuiCol_TableBorderLight]       = ImVec4(0.23f, 0.23f, 0.25f, 1.00f);
+	colors[ImGuiCol_TableHeaderBg]          = ImVec4(0.19f, 0.19f, 0.19f, 1.00f);
+	colors[ImGuiCol_TableBorderStrong]      = ImVec4(0.31f, 0.31f, 0.31f, 1.00f);
+	colors[ImGuiCol_TableBorderLight]       = ImVec4(0.23f, 0.23f, 0.23f, 1.00f);
 	colors[ImGuiCol_TableRowBg]             = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
 	colors[ImGuiCol_TableRowBgAlt]          = ImVec4(1.00f, 1.00f, 1.00f, 0.06f);
 	
 	// Tree lines
-	colors[ImGuiCol_TreeLines]              = ImVec4(0.30f, 0.30f, 0.35f, 0.50f);
-	
+	colors[ImGuiCol_TreeLines]              = ImVec4(0.30f, 0.30f, 0.30f, 0.50f);
+
 	// Drag and drop
-	colors[ImGuiCol_DragDropTarget]         = ImVec4(1.00f, 1.00f, 0.00f, 0.90f);
-	colors[ImGuiCol_DragDropTargetBg]       = ImVec4(0.26f, 0.59f, 0.98f, 0.20f);
-	
+	colors[ImGuiCol_DragDropTarget]         = ImVec4(0.80f, 0.80f, 0.80f, 0.90f);
+	colors[ImGuiCol_DragDropTargetBg]       = ImVec4(0.40f, 0.40f, 0.40f, 0.20f);
+
 	// Navigation
-	colors[ImGuiCol_NavCursor]              = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+	colors[ImGuiCol_NavCursor]              = ImVec4(0.70f, 0.70f, 0.70f, 1.00f);
 	colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
 	colors[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
 	
