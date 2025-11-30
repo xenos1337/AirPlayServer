@@ -416,21 +416,21 @@ raop_rtp_thread_time(void *arg)
         if (type_t == 0x53) {
 
         }
-        // 9-16 NTPÇëÇó±¨ÎÄÀë¿ª·¢ËÍ¶ËÊ±·¢ËÍ¶ËµÄ±¾µØÊ±¼ä¡£  T1
+        // 9-16 NTPï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë¿ªï¿½ï¿½ï¿½Í¶ï¿½Ê±ï¿½ï¿½ï¿½Í¶ËµÄ±ï¿½ï¿½ï¿½Ê±ï¿½ä¡£  T1
         uint64_t Origin_Timestamp = byteutils_read_timeStamp(packet, 8);
-        // 17-24 NTPÇëÇó±¨ÎÄµ½´ï½ÓÊÕ¶ËÊ±½ÓÊÕ¶ËµÄ±¾µØÊ±¼ä¡£ T2
+        // 17-24 NTPï¿½ï¿½ï¿½ï¿½ï¿½Äµï¿½ï¿½ï¿½ï¿½ï¿½Õ¶ï¿½Ê±ï¿½ï¿½ï¿½Õ¶ËµÄ±ï¿½ï¿½ï¿½Ê±ï¿½ä¡£ T2
         uint64_t Receive_Timestamp = byteutils_read_timeStamp(packet, 16);
-        // 25-32 Transmit Timestamp£ºÓ¦´ð±¨ÎÄÀë¿ªÓ¦´ðÕßÊ±Ó¦´ðÕßµÄ±¾µØÊ±¼ä¡£ T3
+        // 25-32 Transmit Timestampï¿½ï¿½Ó¦ï¿½ï¿½ï¿½ï¿½ï¿½ë¿ªÓ¦ï¿½ï¿½ï¿½ï¿½Ê±Ó¦ï¿½ï¿½ï¿½ßµÄ±ï¿½ï¿½ï¿½Ê±ï¿½ä¡£ T3
         uint64_t Transmit_Timestamp = byteutils_read_timeStamp(packet, 24);
 
-        // FIXME: ÏÈ¼òµ¥ÕâÑùÐ´°É
+        // FIXME: ï¿½È¼ï¿½ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½
         rec_pts = Receive_Timestamp;
 
         struct timeval now;
         struct timespec outtime;
         MUTEX_LOCK(raop_rtp->time_mutex);
         gettimeofday(&now, NULL);
-        outtime.tv_sec = now.tv_sec + 3;
+        outtime.tv_sec = now.tv_sec + 1;  // Reduced from 3 to 1 second for faster timeout
         outtime.tv_nsec = now.tv_usec * 1000;
         int ret = pthread_cond_timedwait(&raop_rtp->time_cond, &raop_rtp->time_mutex, &outtime);
         MUTEX_UNLOCK(raop_rtp->time_mutex);
@@ -461,9 +461,9 @@ raop_rtp_thread_udp(void *arg)
             break;
         }
 
-        /* Set timeout value to 5ms */
+        /* Set timeout value to 1ms (reduced from 5ms for lower latency) */
         tv.tv_sec = 0;
-        tv.tv_usec = 5000;
+        tv.tv_usec = 1000;
 
         /* Get the correct nfds value */
         nfds = raop_rtp->csock+1;
@@ -495,12 +495,12 @@ raop_rtp_thread_udp(void *arg)
             int type_c = packet[1] & ~0x80;
             logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_udp type_c 0x%02x, packetlen = %d", type_c, packetlen);
             if (type_c == 0x56) {
-                // ´¦ÀíÖØ´«µÄ°ü£¬È¥³ýÍ·²¿4¸ö×Ö½Ú
+                // ï¿½ï¿½ï¿½ï¿½ï¿½Ø´ï¿½ï¿½Ä°ï¿½ï¿½ï¿½È¥ï¿½ï¿½Í·ï¿½ï¿½4ï¿½ï¿½ï¿½Ö½ï¿½
                 int ret = raop_buffer_queue(raop_rtp->buffer, packet+4, packetlen-4, &raop_rtp->callbacks);
                 assert(ret >= 0);
 
             } else if (type_c == 0x54) {
-                // TODO: ÔÝÊ±²»´¦Àí
+                // TODO: ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
             } else {
                 logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_udp unknown packet");
@@ -508,7 +508,7 @@ raop_rtp_thread_udp(void *arg)
         }
         if (FD_ISSET(raop_rtp->dsock, &rfds)) {
             //logger_log(raop_rtp->logger, LOGGER_INFO, "Would have data packet in queue");
-            // ÕâÀï½ÓÊÕÒôÆµÊý¾Ý
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½ï¿½ï¿½ï¿½
             saddrlen = sizeof(saddr);
             packetlen = recvfrom(raop_rtp->dsock, (char *)packet, sizeof(packet), 0,
                                  (struct sockaddr *)&saddr, &saddrlen);
@@ -516,9 +516,9 @@ raop_rtp_thread_udp(void *arg)
             int type_d = packet[1] & ~0x80;
             //logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_udp type_d 0x%02x, packetlen = %d", type_d, packetlen);
 
-            // ³öÏÖlen=16 Èç¹ûÃ»ÓÐ·¢Ê±¼äµÄ»°
+            // ï¿½ï¿½ï¿½ï¿½len=16 ï¿½ï¿½ï¿½Ã»ï¿½Ð·ï¿½Ê±ï¿½ï¿½Ä»ï¿½
             if (packetlen >= 12) {
-                int no_resend = (raop_rtp->control_rport == 0);// false
+                int no_resend = 1;  // ULTRA-LOW LATENCY: Force immediate playback, bypass buffering wait (was: raop_rtp->control_rport == 0)
                 int buf_ret;
                 const void *audiobuf;
                 int audiobuflen;
@@ -552,7 +552,7 @@ raop_rtp_thread_udp(void *arg)
     return 0;
 }
 
-// Æô¶¯rtp·þÎñ,Èý¸öudp¶Ë¿Ú
+// ï¿½ï¿½ï¿½ï¿½rtpï¿½ï¿½ï¿½ï¿½,ï¿½ï¿½ï¿½ï¿½udpï¿½Ë¿ï¿½
 void
 raop_rtp_start_audio(raop_rtp_t *raop_rtp, int use_udp, unsigned short control_rport, unsigned short timing_rport,
                      unsigned short *control_lport, unsigned short *timing_lport, unsigned short *data_lport)
