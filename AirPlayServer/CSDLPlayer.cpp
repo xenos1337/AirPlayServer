@@ -335,25 +335,24 @@ void CSDLPlayer::loopEvents()
 			}
 		}
 		
-		// MAIN THREAD: Single-threaded rendering approach with frame pacing
-		// Always render at 30 FPS to keep everything synchronized
+		// MAIN THREAD: Hardware-accelerated YUV rendering with ImGui overlay
 		{
 			CAutoLock videoLock(m_mutexVideo, "renderLoop");
-			
-			// Step 1: Blit video buffer to screen surface
-			if (m_hasNewFrame && m_videoBuffer != NULL && m_surface != NULL) {
-				// Copy entire video buffer to screen surface
-				SDL_BlitSurface(m_videoBuffer, NULL, m_surface, NULL);
+
+			// Step 1: Display YUV overlay using GPU acceleration
+			if (m_hasNewFrame && m_yuv != NULL && m_surface != NULL) {
+				// Hardware-accelerated YUV->RGB conversion and scaling
+				SDL_DisplayYUVOverlay(m_yuv, &m_displayRect);
 				m_hasNewFrame = false; // Mark frame as rendered
 				m_lastFrameTime = GetTickCount();
-			} else if (m_videoBuffer != NULL && m_surface != NULL) {
-				// No new frame, but blit existing video buffer (keeps video displayed)
-				SDL_BlitSurface(m_videoBuffer, NULL, m_surface, NULL);
+			} else if (m_yuv != NULL && m_surface != NULL && m_videoWidth > 0) {
+				// No new frame, but redisplay existing YUV overlay
+				SDL_DisplayYUVOverlay(m_yuv, &m_displayRect);
 			} else if (m_surface != NULL) {
 				// No video yet - fill with black
 				SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
 			}
-			
+
 			// Step 2: Render ImGui on top of m_surface (every frame for smooth UI)
 			m_imgui.NewFrame(m_surface);
 			if (m_bConnected) {
@@ -368,7 +367,7 @@ void CSDLPlayer::loopEvents()
 			}
 			// ImGui renders with alpha blending on top of the video layer
 			m_imgui.Render(m_surface);
-			
+
 			// Step 3: Flip to display everything
 			SDL_Flip(m_surface);
 		}
@@ -415,81 +414,57 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		return;
 	}
 
-	// CALLBACK THREAD: Write ONLY to m_videoBuffer, NOT to m_surface
-	// The main thread will blit from m_videoBuffer to m_surface
+	// CALLBACK THREAD: Write YUV data directly to hardware overlay for GPU acceleration
 	CAutoLock oLock(m_mutexVideo, "outputVideo");
-	
-	// Ensure video buffer exists
-	if (m_videoBuffer == NULL) {
+
+	// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
+	// This prevents frame accumulation and increasing delay over time
+	if (m_hasNewFrame) {
+		return;  // Skip this frame to prevent drift/accumulation
+	}
+
+	// Ensure YUV overlay exists
+	if (m_yuv == NULL) {
 		return;
 	}
-	
-	// Lock video buffer for direct pixel access
-	if (SDL_MUSTLOCK(m_videoBuffer)) {
-		if (SDL_LockSurface(m_videoBuffer) != 0) {
-			return; // Failed to lock, skip this frame
-		}
+
+	// Lock YUV overlay for direct pixel access
+	if (SDL_LockYUVOverlay(m_yuv) != 0) {
+		return; // Failed to lock, skip this frame
 	}
-	
-	// Get YUV plane pointers
-	const Uint8* yPlane = data->data;
-	const Uint8* uPlane = data->data + data->dataLen[0];
-	const Uint8* vPlane = data->data + data->dataLen[0] + data->dataLen[1];
-	
-	// Calculate scaling factors
-	float scaleX = (float)data->width / m_displayRect.w;
-	float scaleY = (float)data->height / m_displayRect.h;
-	
-	// Clear entire video buffer to black first (letterbox/pillarbox)
-	Uint32 black = SDL_MapRGB(m_videoBuffer->format, 0, 0, 0);
-	for (int y = 0; y < m_videoBuffer->h; y++) {
-		Uint32* row = (Uint32*)((Uint8*)m_videoBuffer->pixels + y * m_videoBuffer->pitch);
-		for (int x = 0; x < m_videoBuffer->w; x++) {
-			row[x] = black;
-		}
+
+	// FAST PATH: Simple memcpy of YUV planes to overlay (GPU handles conversion & scaling)
+	// Get source YUV plane pointers
+	const Uint8* srcY = data->data;
+	const Uint8* srcU = data->data + data->dataLen[0];
+	const Uint8* srcV = data->data + data->dataLen[0] + data->dataLen[1];
+
+	// Copy Y plane
+	for (unsigned int y = 0; y < data->height; y++) {
+		memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
+		       srcY + y * data->pitch[0],
+		       data->width);
 	}
-	
-	// Draw scaled video to display rect area only
-	for (int dy = 0; dy < m_displayRect.h; dy++) {
-		int screenY = m_displayRect.y + dy;
-		if (screenY < 0 || screenY >= m_videoBuffer->h) continue;
-		
-		int srcY = (int)(dy * scaleY);
-		if (srcY >= (int)data->height) srcY = data->height - 1;
-		
-		Uint32* dstRow = (Uint32*)((Uint8*)m_videoBuffer->pixels + screenY * m_videoBuffer->pitch);
-		
-		for (int dx = 0; dx < m_displayRect.w; dx++) {
-			int screenX = m_displayRect.x + dx;
-			if (screenX < 0 || screenX >= m_videoBuffer->w) continue;
-			
-			int srcX = (int)(dx * scaleX);
-			if (srcX >= (int)data->width) srcX = data->width - 1;
-			
-			// Get YUV values (U and V are subsampled 2x2)
-			int y = yPlane[srcY * data->pitch[0] + srcX];
-			int u = uPlane[(srcY / 2) * data->pitch[1] + (srcX / 2)];
-			int v = vPlane[(srcY / 2) * data->pitch[2] + (srcX / 2)];
-			
-			// Convert to RGB
-			Uint8 r, g, b;
-			YUVToRGB(y, u, v, &r, &g, &b);
-			
-			// Write pixel to video buffer (NOT to screen surface)
-			dstRow[screenX] = SDL_MapRGB(m_videoBuffer->format, r, g, b);
-		}
+
+	// Copy U plane (half resolution)
+	for (unsigned int y = 0; y < data->height / 2; y++) {
+		memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
+		       srcU + y * data->pitch[1],
+		       data->width / 2);
 	}
-	
-	if (SDL_MUSTLOCK(m_videoBuffer)) {
-		SDL_UnlockSurface(m_videoBuffer);
+
+	// Copy V plane (half resolution)
+	for (unsigned int y = 0; y < data->height / 2; y++) {
+		memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
+		       srcV + y * data->pitch[2],
+		       data->width / 2);
 	}
-	
+
+	SDL_UnlockYUVOverlay(m_yuv);
+
 	// Store frame PTS and set new frame flag
 	m_lastFramePTS = data->pts;
 	m_hasNewFrame = true;
-	
-	// Note: Don't touch m_surface here - only the main thread does that
-	// The main loop will blit from m_videoBuffer to m_surface, then render ImGui on top
 }
 
 void CSDLPlayer::outputAudio(SFgAudioFrame* data)
@@ -515,6 +490,16 @@ void CSDLPlayer::outputAudio(SFgAudioFrame* data)
 
 	{
 		CAutoLock oLock(m_mutexAudio, "outputAudio");
+
+		// AUDIO QUEUE LIMITING: Prevent unbounded growth causing delay accumulation
+		// If queue exceeds 10 frames (~200ms at 48kHz), drop oldest frames
+		while (m_queueAudio.size() >= 10) {
+			SAudioFrame* oldFrame = m_queueAudio.front();
+			m_queueAudio.pop();
+			delete[] oldFrame->data;
+			delete oldFrame;
+		}
+
 		m_queueAudio.push(dataClone);
 	}
 }
@@ -978,7 +963,7 @@ void CSDLPlayer::initAudio(SFgAudioFrame* data)
 		wanted_spec.format = AUDIO_S16SYS;
 		wanted_spec.channels = data->channels;
 		wanted_spec.silence = 0;
-		wanted_spec.samples = 1920;
+		wanted_spec.samples = 512;  // Reduced from 1920 to 512 for lower latency (~10.7ms at 48kHz vs 40ms)
 		wanted_spec.callback = sdlAudioCallback;
 		wanted_spec.userdata = this;
 
@@ -999,7 +984,7 @@ void CSDLPlayer::initAudio(SFgAudioFrame* data)
 			m_fileWav = fopen("airplay-audio.wav", "wb");
 		}
 	}
-	if (m_queueAudio.size() > 5) {
+	if (m_queueAudio.size() > 2) {  // Reduced from 5 to 2 for lower latency (~21ms vs 200ms initial delay)
 		SDL_PauseAudio(0);
 	}
 }
