@@ -411,17 +411,16 @@ BOOL GetMacAddress(char strMac[6])
 	AdapterInfoSize = 0;
 	Err = GetAdaptersInfo(NULL, &AdapterInfoSize);
 	if ((Err != 0) && (Err != ERROR_BUFFER_OVERFLOW)) {
-		printf("���������Ϣʧ��!");
+		printf("Get Mac Address failed!");
 		return   FALSE;
 	}
-	//   ����������Ϣ�ڴ�  
 	pAdapterInfo = (PIP_ADAPTER_INFO)GlobalAlloc(GPTR, AdapterInfoSize);
 	if (pAdapterInfo == NULL) {
-		printf("����������Ϣ�ڴ�ʧ��");
+		printf("Get Mac Address memory allocation failed");
 		return   FALSE;
 	}
 	if (GetAdaptersInfo(pAdapterInfo, &AdapterInfoSize) != 0) {
-		printf("���������Ϣʧ��!\n");
+		printf("Get Mac Address information failed!\n");
 		GlobalFree(pAdapterInfo);
 		return   FALSE;
 	}

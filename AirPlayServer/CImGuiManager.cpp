@@ -54,7 +54,47 @@ bool CImGuiManager::Init(SDL_Surface* surface)
 	}
 	
 	// Initialize font and build font atlas
-	io.Fonts->AddFontDefault();
+	// Try to load fonts in order: Segoe UI Variable -> Segoe UI -> Arial -> Default
+	ImFont* font = NULL;
+	const char* fontPaths[] = {
+		"C:\\Windows\\Fonts\\segoeuiv.ttf",      // Segoe UI Variable
+		"C:\\Windows\\Fonts\\SegoeUIVariable.ttf", // Segoe UI Variable (alternate name)
+		"C:\\Windows\\Fonts\\segoeui.ttf",        // Segoe UI
+		"C:\\Windows\\Fonts\\arial.ttf"          // Arial
+	};
+	
+	// Try each font path - check file existence first to avoid unnecessary errors
+	for (int i = 0; i < 4 && font == NULL; i++) {
+		// Check if file exists before trying to load (Windows-specific check)
+		DWORD fileAttributes = GetFileAttributesA(fontPaths[i]);
+		if (fileAttributes != INVALID_FILE_ATTRIBUTES && !(fileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+			// Create a fresh font config with default constructor, then set flags
+			ImFontConfig fontConfig;
+			fontConfig.Flags = ImFontFlags_NoLoadError;
+			// Improve font rendering quality
+			fontConfig.OversampleH = 3;  // Higher oversampling for better quality
+			fontConfig.OversampleV = 1;  // Vertical oversampling
+			fontConfig.PixelSnapH = true;  // Snap to pixel boundaries
+			fontConfig.RasterizerMultiply = 1.0f;  // Normal brightness
+			
+			font = io.Fonts->AddFontFromFileTTF(fontPaths[i], 17.0f, &fontConfig, NULL);
+		}
+	}
+	
+	// If all custom fonts failed, use default ImGui font
+	if (font == NULL) {
+		font = io.Fonts->AddFontDefault();
+	}
+	
+	// Ensure we have a valid font (safety check)
+	if (font == NULL && io.Fonts->Fonts.Size > 0) {
+		font = io.Fonts->Fonts[0];
+	}
+	
+	// Set as default font if we have one
+	if (font != NULL) {
+		io.FontDefault = font;
+	}
 	
 	// Build font atlas texture
 	unsigned char* pixels;
@@ -498,18 +538,187 @@ void CImGuiManager::SetupStyle()
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiStyle& style = ImGui::GetStyle();
 	
-	style.WindowRounding = 5.0f;
+	// Modern styling: minimal rounding, tight spacing
+	style.WindowRounding = 4.0f;
+	style.ChildRounding = 4.0f;
 	style.FrameRounding = 3.0f;
-	style.GrabRounding = 3.0f;
+	style.PopupRounding = 4.0f;
 	style.ScrollbarRounding = 3.0f;
-	style.WindowPadding = ImVec2(10, 10);
-	style.FramePadding = ImVec2(5, 5);
-	style.ItemSpacing = ImVec2(8, 6);
-	style.ItemInnerSpacing = ImVec2(6, 4);
-	style.TouchExtraPadding = ImVec2(0, 0);
-	style.IndentSpacing = 21.0f;
-	style.ScrollbarSize = 14.0f;
-	style.GrabMinSize = 10.0f;
+	style.GrabRounding = 3.0f;
+	style.TabRounding = 3.0f;
+	style.TreeLinesRounding = 2.0f;
+	style.DragDropTargetRounding = 4.0f;
+	
+	// Modern padding and spacing - tighter for cleaner look
+	style.WindowPadding = ImVec2(8.0f, 8.0f);
+	style.FramePadding = ImVec2(6.0f, 4.0f);
+	style.CellPadding = ImVec2(4.0f, 2.0f);
+	style.ItemSpacing = ImVec2(6.0f, 4.0f);
+	style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
+	style.TouchExtraPadding = ImVec2(0.0f, 0.0f);
+	style.SeparatorTextPadding = ImVec2(8.0f, 4.0f);
+	style.DisplayWindowPadding = ImVec2(19.0f, 19.0f);
+	style.DisplaySafeAreaPadding = ImVec2(3.0f, 3.0f);
+	
+	// Borders and sizes
+	style.WindowBorderSize = 1.0f;
+	style.ChildBorderSize = 1.0f;
+	style.PopupBorderSize = 1.0f;
+	style.FrameBorderSize = 0.0f;
+	style.TabBorderSize = 0.0f;
+	style.TabBarBorderSize = 1.0f;
+	style.DragDropTargetBorderSize = 2.0f;
+	style.ImageBorderSize = 0.0f;
+	style.SeparatorTextBorderSize = 1.0f;
+	
+	// Spacing and sizing
+	style.IndentSpacing = 18.0f;
+	style.ColumnsMinSpacing = 6.0f;
+	style.ScrollbarSize = 12.0f;
+	style.ScrollbarPadding = 0.0f;
+	style.GrabMinSize = 8.0f;
+	style.LogSliderDeadzone = 4.0f;
+	style.TabMinWidthBase = 20.0f;
+	style.TabMinWidthShrink = 0.0f;
+	style.TabCloseButtonMinWidthSelected = 0.0f;
+	style.TabCloseButtonMinWidthUnselected = 0.0f;
+	style.TabBarOverlineSize = 2.0f;
+	style.TreeLinesSize = 1.0f;
+	style.DragDropTargetPadding = 4.0f;
+	
+	// Window settings
+	style.WindowMinSize = ImVec2(32.0f, 32.0f);
+	style.WindowTitleAlign = ImVec2(0.0f, 0.5f);
+	style.WindowMenuButtonPosition = ImGuiDir_Left;
+	style.WindowBorderHoverPadding = 4.0f;
+	
+	// Table settings
+	style.TableAngledHeadersAngle = 35.0f;
+	style.TableAngledHeadersTextAlign = ImVec2(0.0f, 0.0f);
+	
+	// Button and selectable alignment
+	style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
+	style.SelectableTextAlign = ImVec2(0.0f, 0.0f);
+	style.SeparatorTextAlign = ImVec2(0.0f, 0.5f);
+	
+	// Color button position
+	style.ColorButtonPosition = ImGuiDir_Right;
+	
+	// Anti-aliasing
+	style.AntiAliasedLines = true;
+	style.AntiAliasedLinesUseTex = true;
+	style.AntiAliasedFill = true;
+	style.CurveTessellationTol = 1.25f;
+	style.CircleTessellationMaxError = 0.30f;
+	
+	// Alpha
+	style.Alpha = 1.0f;
+	style.DisabledAlpha = 0.60f;
+	
+	// Apply modern theme colors - all colors included
+	ImVec4* colors = style.Colors;
+	
+	// Text colors
+	colors[ImGuiCol_Text]                   = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+	colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+	colors[ImGuiCol_TextLink]               = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+	colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.26f, 0.59f, 0.98f, 0.35f);
+	
+	// Window colors
+	colors[ImGuiCol_WindowBg]               = ImVec4(0.08f, 0.08f, 0.08f, 0.95f);
+	colors[ImGuiCol_ChildBg]                = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+	colors[ImGuiCol_PopupBg]                = ImVec4(0.10f, 0.10f, 0.10f, 0.95f);
+	
+	// Border colors
+	colors[ImGuiCol_Border]                 = ImVec4(0.30f, 0.30f, 0.35f, 0.50f);
+	colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+	
+	// Frame colors
+	colors[ImGuiCol_FrameBg]                = ImVec4(0.18f, 0.18f, 0.22f, 0.54f);
+	colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.26f, 0.59f, 0.98f, 0.40f);
+	colors[ImGuiCol_FrameBgActive]          = ImVec4(0.26f, 0.59f, 0.98f, 0.67f);
+	
+	// Title bar colors
+	colors[ImGuiCol_TitleBg]                = ImVec4(0.06f, 0.06f, 0.06f, 1.00f);
+	colors[ImGuiCol_TitleBgActive]          = ImVec4(0.16f, 0.29f, 0.48f, 1.00f);
+	colors[ImGuiCol_TitleBgCollapsed]       = ImVec4(0.00f, 0.00f, 0.00f, 0.51f);
+	
+	// Menu bar
+	colors[ImGuiCol_MenuBarBg]              = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
+	
+	// Scrollbar colors
+	colors[ImGuiCol_ScrollbarBg]            = ImVec4(0.02f, 0.02f, 0.02f, 0.53f);
+	colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.31f, 0.31f, 0.31f, 1.00f);
+	colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.41f, 0.41f, 0.41f, 1.00f);
+	colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.51f, 0.51f, 0.51f, 1.00f);
+	
+	// Checkbox and slider
+	colors[ImGuiCol_CheckMark]              = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+	colors[ImGuiCol_SliderGrab]             = ImVec4(0.24f, 0.52f, 0.88f, 1.00f);
+	colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+	
+	// Button colors
+	colors[ImGuiCol_Button]                 = ImVec4(0.26f, 0.59f, 0.98f, 0.40f);
+	colors[ImGuiCol_ButtonHovered]          = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
+	colors[ImGuiCol_ButtonActive]           = ImVec4(0.06f, 0.53f, 0.98f, 1.00f);
+	
+	// Header colors (for selectable, tree nodes, etc.)
+	colors[ImGuiCol_Header]                 = ImVec4(0.26f, 0.59f, 0.98f, 0.31f);
+	colors[ImGuiCol_HeaderHovered]          = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
+	colors[ImGuiCol_HeaderActive]           = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+	
+	// Separator colors
+	colors[ImGuiCol_Separator]              = ImVec4(0.30f, 0.30f, 0.35f, 0.50f);
+	colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.10f, 0.40f, 0.75f, 0.78f);
+	colors[ImGuiCol_SeparatorActive]        = ImVec4(0.10f, 0.40f, 0.75f, 1.00f);
+	
+	// Resize grip colors
+	colors[ImGuiCol_ResizeGrip]             = ImVec4(0.26f, 0.59f, 0.98f, 0.20f);
+	colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.26f, 0.59f, 0.98f, 0.67f);
+	colors[ImGuiCol_ResizeGripActive]       = ImVec4(0.26f, 0.59f, 0.98f, 0.95f);
+	
+	// Input text
+	colors[ImGuiCol_InputTextCursor]        = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+	
+	// Tab colors
+	colors[ImGuiCol_Tab]                    = ImVec4(0.18f, 0.35f, 0.58f, 0.86f);
+	colors[ImGuiCol_TabHovered]             = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
+	colors[ImGuiCol_TabSelected]            = ImVec4(0.20f, 0.41f, 0.68f, 1.00f);
+	colors[ImGuiCol_TabSelectedOverline]    = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+	colors[ImGuiCol_TabDimmed]              = ImVec4(0.07f, 0.10f, 0.15f, 0.97f);
+	colors[ImGuiCol_TabDimmedSelected]       = ImVec4(0.14f, 0.26f, 0.42f, 1.00f);
+	colors[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.50f, 0.50f, 0.50f, 0.00f);
+	
+	// Plot colors
+	colors[ImGuiCol_PlotLines]              = ImVec4(0.61f, 0.61f, 0.61f, 1.00f);
+	colors[ImGuiCol_PlotLinesHovered]       = ImVec4(1.00f, 0.43f, 0.35f, 1.00f);
+	colors[ImGuiCol_PlotHistogram]          = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
+	colors[ImGuiCol_PlotHistogramHovered]   = ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
+	
+	// Table colors
+	colors[ImGuiCol_TableHeaderBg]          = ImVec4(0.19f, 0.19f, 0.20f, 1.00f);
+	colors[ImGuiCol_TableBorderStrong]      = ImVec4(0.31f, 0.31f, 0.35f, 1.00f);
+	colors[ImGuiCol_TableBorderLight]       = ImVec4(0.23f, 0.23f, 0.25f, 1.00f);
+	colors[ImGuiCol_TableRowBg]             = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+	colors[ImGuiCol_TableRowBgAlt]          = ImVec4(1.00f, 1.00f, 1.00f, 0.06f);
+	
+	// Tree lines
+	colors[ImGuiCol_TreeLines]              = ImVec4(0.30f, 0.30f, 0.35f, 0.50f);
+	
+	// Drag and drop
+	colors[ImGuiCol_DragDropTarget]         = ImVec4(1.00f, 1.00f, 0.00f, 0.90f);
+	colors[ImGuiCol_DragDropTargetBg]       = ImVec4(0.26f, 0.59f, 0.98f, 0.20f);
+	
+	// Navigation
+	colors[ImGuiCol_NavCursor]              = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
+	colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
+	colors[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
+	
+	// Modal window
+	colors[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
+	
+	// Unsaved marker
+	colors[ImGuiCol_UnsavedMarker]          = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
 }
 
 const char* CImGuiManager::GetDeviceName() const
