@@ -13,6 +13,10 @@ CImGuiManager::CImGuiManager()
 	, m_pContext(NULL)
 	, m_bEditingDeviceName(false)
 	, m_bShowUI(true)
+	, m_bUIVisibilityChanged(false)
+	, m_qualityPreset(QUALITY_BALANCED)  // Default to balanced (60fps, normal quality)
+	, m_bNeedSyncTabs(false)
+	, m_bLastWasOverlay(false)
 {
 	memset(m_deviceNameBuffer, 0, sizeof(m_deviceNameBuffer));
 }
@@ -236,6 +240,12 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 		return;
 	}
 
+	// Detect if we're switching from overlay to home screen
+	if (m_bLastWasOverlay) {
+		m_bNeedSyncTabs = true;
+		m_bLastWasOverlay = false;
+	}
+
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiIO& io = ImGui::GetIO();
 
@@ -300,6 +310,51 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	ImGui::PopItemWidth();
 	m_bEditingDeviceName = ImGui::IsItemActive();
 
+	ImGui::Dummy(ImVec2(0, 8.0f));
+	ImGui::Separator();
+	ImGui::Dummy(ImVec2(0, 8.0f));
+
+	// Quality preset selection - centered tabs
+	float qualityLabelWidth = ImGui::CalcTextSize("Quality Preset:").x;
+	ImGui::SetCursorPosX((windowWidth - qualityLabelWidth) * 0.5f - padding);
+	ImGui::Text("Quality Preset:");
+	ImGui::Dummy(ImVec2(0, 4.0f));
+
+	// Calculate tab bar width to center it
+	float tabWidth = contentWidth * 0.6f;
+	ImGui::SetCursorPosX((windowWidth - tabWidth) * 0.5f - padding);
+	ImGui::PushItemWidth(tabWidth);
+
+	if (ImGui::BeginTabBar("QualityPresetTabs", ImGuiTabBarFlags_None)) {
+		// Only use SetSelected once when syncing from overlay, then clear flag
+		ImGuiTabItemFlags goodFlags = (m_bNeedSyncTabs && m_qualityPreset == QUALITY_GOOD) ? ImGuiTabItemFlags_SetSelected : 0;
+		ImGuiTabItemFlags balancedFlags = (m_bNeedSyncTabs && m_qualityPreset == QUALITY_BALANCED) ? ImGuiTabItemFlags_SetSelected : 0;
+		ImGuiTabItemFlags fastFlags = (m_bNeedSyncTabs && m_qualityPreset == QUALITY_FAST) ? ImGuiTabItemFlags_SetSelected : 0;
+		m_bNeedSyncTabs = false;  // Clear flag after applying
+
+		if (ImGui::BeginTabItem("Good Quality", NULL, goodFlags)) {
+			m_qualityPreset = QUALITY_GOOD;
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "30 FPS - Best video quality");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Uses high-quality Lanczos scaling");
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Balanced", NULL, balancedFlags)) {
+			m_qualityPreset = QUALITY_BALANCED;
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "60 FPS - Good balance");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Uses fast bilinear scaling");
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Fast Speed", NULL, fastFlags)) {
+			m_qualityPreset = QUALITY_FAST;
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "60 FPS - Lowest latency");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Uses nearest-neighbor scaling");
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
+	}
+
+	ImGui::PopItemWidth();
+
 	ImGui::Dummy(ImVec2(0, 4.0f));
 	ImGui::Separator();
 	ImGui::Dummy(ImVec2(0, 4.0f));
@@ -347,22 +402,29 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 	if (!m_bInitialized) {
 		return;
 	}
-	
+
+	// Detect if we're switching from home screen to overlay
+	if (!m_bLastWasOverlay) {
+		m_bNeedSyncTabs = true;
+		m_bLastWasOverlay = true;
+	}
+
 	ImGui::SetCurrentContext(m_pContext);
-	
+
 	// Toggle UI with H key
 	ImGuiIO& io = ImGui::GetIO();
 	if (ImGui::IsKeyPressed(ImGuiKey_H)) {
+		bool wasVisible = *pShowUI;
 		*pShowUI = !*pShowUI;
+		// If we just hid the UI, set flag to trigger surface clear
+		if (wasVisible && !*pShowUI) {
+			m_bUIVisibilityChanged = true;
+		}
 	}
-	
+
 	if (!*pShowUI) {
-		// Show small indicator when UI is hidden
-		ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-		ImGui::SetNextWindowBgAlpha(0.3f);
-		ImGui::Begin("##HiddenUI", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-		ImGui::Text("Press H to show UI");
-		ImGui::End();
+		// Don't render anything when UI is hidden - just return
+		// The video will cover the full screen
 		return;
 	}
 	
@@ -418,10 +480,39 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 	} else {
 		ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Waiting...");
 	}
-	
+
+	ImGui::Separator();
+
+	// Quality preset selection
+	ImGui::Text("Quality:");
+	if (ImGui::BeginTabBar("QualityTabs", ImGuiTabBarFlags_None)) {
+		// Only use SetSelected once when syncing from home screen, then clear flag
+		ImGuiTabItemFlags goodFlags = (m_bNeedSyncTabs && m_qualityPreset == QUALITY_GOOD) ? ImGuiTabItemFlags_SetSelected : 0;
+		ImGuiTabItemFlags balancedFlags = (m_bNeedSyncTabs && m_qualityPreset == QUALITY_BALANCED) ? ImGuiTabItemFlags_SetSelected : 0;
+		ImGuiTabItemFlags fastFlags = (m_bNeedSyncTabs && m_qualityPreset == QUALITY_FAST) ? ImGuiTabItemFlags_SetSelected : 0;
+		m_bNeedSyncTabs = false;  // Clear flag after applying
+
+		if (ImGui::BeginTabItem("Good", NULL, goodFlags)) {
+			m_qualityPreset = QUALITY_GOOD;
+			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "30fps, HQ");
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Balanced", NULL, balancedFlags)) {
+			m_qualityPreset = QUALITY_BALANCED;
+			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "60fps, Normal");
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Fast", NULL, fastFlags)) {
+			m_qualityPreset = QUALITY_FAST;
+			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "60fps, Low");
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
+	}
+
 	ImGui::Separator();
 	ImGui::Text("Press H to hide UI");
-	
+
 	ImGui::End();
 }
 

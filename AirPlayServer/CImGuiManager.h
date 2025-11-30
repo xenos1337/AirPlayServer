@@ -4,6 +4,14 @@
 
 class CSDLPlayer;
 
+// Quality presets for video rendering
+enum EQualityPreset
+{
+	QUALITY_GOOD = 0,      // 30fps, high quality scaling (SWS_LANCZOS)
+	QUALITY_BALANCED = 1,  // 60fps, normal quality scaling (SWS_FAST_BILINEAR)
+	QUALITY_FAST = 2       // 60fps, low quality scaling (SWS_POINT)
+};
+
 class CImGuiManager
 {
 public:
@@ -29,6 +37,16 @@ public:
 	// Get edited device name
 	const char* GetDeviceName() const;
 
+	// Get quality preset
+	EQualityPreset GetQualityPreset() const { return m_qualityPreset; }
+
+	// Check if UI was just hidden (need to clear surface)
+	bool WasUIJustHidden() {
+		bool result = m_bUIVisibilityChanged;
+		m_bUIVisibilityChanged = false;  // Clear flag after reading
+		return result;
+	}
+
 private:
 	bool m_bInitialized;
 	ImGuiContext* m_pContext;
@@ -39,7 +57,13 @@ private:
 	
 	// UI state
 	bool m_bShowUI;
-	
+	bool m_bUIVisibilityChanged;  // Flag to track when UI is hidden (need to clear surface)
+
+	// Quality preset
+	EQualityPreset m_qualityPreset;
+	bool m_bNeedSyncTabs;  // Flag to sync tab selection once when switching views
+	bool m_bLastWasOverlay;  // Track if last rendered was overlay (true) or home (false)
+
 	void SetupStyle();
 	void RenderDrawData(ImDrawData* drawData, SDL_Surface* surface);
 };
