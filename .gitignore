@@ -146,7 +146,6 @@ out/
 # Compiled Static libraries
 *.lai
 *.la
-*.a
 
 # Recipe files
 *.recipe
