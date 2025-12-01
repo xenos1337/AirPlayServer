@@ -37,6 +37,19 @@
 
 #define MAX_DEVICEID 18
 #define MAX_SERVNAME 256
+#define MAX_INTERFACES 16
+
+#ifdef WIN32
+#include <iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
+#endif
+
+/* Structure to hold network interface information */
+typedef struct {
+	char hwaddr[MAX_HWADDR_LEN];
+	uint32_t ifIndex;
+	int valid;
+} network_interface_t;
 
 #if defined(HAVE_LIBDL) && !defined(__APPLE__)
 # define USE_LIBDL 1

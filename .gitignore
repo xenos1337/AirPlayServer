@@ -47,7 +47,6 @@ msbuild.err
 
 # Linker files
 *.ilk
-*.lib
 *.exp
 *.map
 
