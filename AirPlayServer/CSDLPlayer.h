@@ -157,6 +157,10 @@ public:
 	int m_scaledHeight;            // Current scaled output height
 	volatile LONG m_bScalerNeedsReinit;  // Flag to reinit scaler (thread-safe)
 
+	// Deferred scaler cleanup (to handle cross-thread freeing safely)
+	SwsContext* m_pendingFreeCtx;  // Context waiting to be freed (by callback thread)
+	uint8_t* m_pendingFreeYUV[2][3];  // Buffers waiting to be freed
+
 	// Double-buffered scaled YUV planes for lockless producer-consumer pattern
 	// Buffer 0 = front buffer (being displayed), Buffer 1 = back buffer (being written)
 	uint8_t* m_scaledYUV[2][3];    // [buffer_index][plane] - two sets of YUV planes
@@ -178,5 +182,6 @@ public:
 
 	void initScaler(int srcW, int srcH, int dstW, int dstH);
 	void freeScaler();
+	void freePendingScalerResources();  // Free deferred scaler resources (called from callback thread)
 };
 

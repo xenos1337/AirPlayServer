@@ -109,6 +109,15 @@ CSDLPlayer::CSDLPlayer()
 	m_scaledYUV[1][0] = NULL;
 	m_scaledYUV[1][1] = NULL;
 	m_scaledYUV[1][2] = NULL;
+
+	// Initialize deferred cleanup pointers
+	m_pendingFreeCtx = NULL;
+	m_pendingFreeYUV[0][0] = NULL;
+	m_pendingFreeYUV[0][1] = NULL;
+	m_pendingFreeYUV[0][2] = NULL;
+	m_pendingFreeYUV[1][0] = NULL;
+	m_pendingFreeYUV[1][1] = NULL;
+	m_pendingFreeYUV[1][2] = NULL;
 	m_scaledPitch[0] = 0;
 	m_scaledPitch[1] = 0;
 	m_scaledPitch[2] = 0;
@@ -143,6 +152,14 @@ CSDLPlayer::~CSDLPlayer()
 	freeScaler();
 	printf("[RESIZE-DEBUG] ~CSDLPlayer: freeScaler() done\n");
 	fflush(stdout);
+
+	// Free any pending resources (safe now since server is stopped and no more callbacks)
+	printf("[RESIZE-DEBUG] ~CSDLPlayer: calling freePendingScalerResources()\n");
+	fflush(stdout);
+	freePendingScalerResources();
+	printf("[RESIZE-DEBUG] ~CSDLPlayer: freePendingScalerResources() done\n");
+	fflush(stdout);
+
 	unInit();
 
 	CloseHandle(m_mutexAudio);
@@ -587,6 +604,9 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	if (data->width == 0 || data->height == 0) {
 		return;
 	}
+
+	// Free any pending scaler resources from previous resize (safe to do from callback thread)
+	freePendingScalerResources();
 
 	// Skip video processing during resize to prevent race conditions
 	if (m_bResizing) {
@@ -1774,6 +1794,42 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	fflush(stdout);
 }
 
+// Actually free the pending scaler resources (called from callback thread or destructor)
+void CSDLPlayer::freePendingScalerResources()
+{
+	// Free any pending context (from previous resize)
+	if (m_pendingFreeCtx != NULL) {
+		printf("[RESIZE-DEBUG] freePendingScalerResources: freeing pending sws context %p\n", m_pendingFreeCtx);
+		fflush(stdout);
+		SwsContext* ctx = m_pendingFreeCtx;
+		m_pendingFreeCtx = NULL;
+		sws_freeContext(ctx);
+		printf("[RESIZE-DEBUG] freePendingScalerResources: pending sws context freed\n");
+		fflush(stdout);
+	}
+
+	// Free any pending buffers
+	for (int i = 0; i < 2; i++) {
+		if (m_pendingFreeYUV[i][0] != NULL || m_pendingFreeYUV[i][1] != NULL || m_pendingFreeYUV[i][2] != NULL) {
+			printf("[RESIZE-DEBUG] freePendingScalerResources: freeing pending buffer[%d] = {%p, %p, %p}\n",
+				i, m_pendingFreeYUV[i][0], m_pendingFreeYUV[i][1], m_pendingFreeYUV[i][2]);
+			fflush(stdout);
+		}
+		if (m_pendingFreeYUV[i][0] != NULL) {
+			_aligned_free(m_pendingFreeYUV[i][0]);
+			m_pendingFreeYUV[i][0] = NULL;
+		}
+		if (m_pendingFreeYUV[i][1] != NULL) {
+			_aligned_free(m_pendingFreeYUV[i][1]);
+			m_pendingFreeYUV[i][1] = NULL;
+		}
+		if (m_pendingFreeYUV[i][2] != NULL) {
+			_aligned_free(m_pendingFreeYUV[i][2]);
+			m_pendingFreeYUV[i][2] = NULL;
+		}
+	}
+}
+
 void CSDLPlayer::freeScaler()
 {
 	printf("[RESIZE-DEBUG] freeScaler: ENTER m_swsCtx=%p, scaledSize=%dx%d\n",
@@ -1788,39 +1844,54 @@ void CSDLPlayer::freeScaler()
 	m_srcWidth = 0;
 	m_srcHeight = 0;
 
+	// DEFERRED CLEANUP: Don't free the SwsContext directly from main thread
+	// FFmpeg's swscale may have thread affinity issues when freeing from a different
+	// thread than the one that created/used the context.
+	// Instead, save the pointers and let the callback thread free them.
+
 	if (m_swsCtx != NULL) {
-		printf("[RESIZE-DEBUG] freeScaler: freeing sws context (was %dx%d)\n", oldWidth, oldHeight);
+		printf("[RESIZE-DEBUG] freeScaler: deferring sws context free (was %dx%d), ctx=%p\n",
+			oldWidth, oldHeight, m_swsCtx);
 		fflush(stdout);
-		SwsContext* ctx = m_swsCtx;
-		m_swsCtx = NULL;  // Clear pointer BEFORE freeing to prevent use-after-free
-		sws_freeContext(ctx);
-		printf("[RESIZE-DEBUG] freeScaler: sws context freed successfully\n");
-		fflush(stdout);
+
+		// First, free any previously pending context (shouldn't happen normally)
+		if (m_pendingFreeCtx != NULL) {
+			printf("[RESIZE-DEBUG] freeScaler: WARNING - freeing orphaned pending ctx %p\n", m_pendingFreeCtx);
+			fflush(stdout);
+			sws_freeContext(m_pendingFreeCtx);
+		}
+
+		// Move current context to pending
+		m_pendingFreeCtx = m_swsCtx;
+		m_swsCtx = NULL;
 	}
 
-	// Free double-buffered scaled YUV planes
+	// Move buffers to pending free list
 	for (int i = 0; i < 2; i++) {
-		printf("[RESIZE-DEBUG] freeScaler: freeing buffer[%d] = {%p, %p, %p}\n",
-			i, m_scaledYUV[i][0], m_scaledYUV[i][1], m_scaledYUV[i][2]);
-		fflush(stdout);
-		if (m_scaledYUV[i][0] != NULL) {
-			_aligned_free(m_scaledYUV[i][0]);
-			m_scaledYUV[i][0] = NULL;
+		if (m_scaledYUV[i][0] != NULL || m_scaledYUV[i][1] != NULL || m_scaledYUV[i][2] != NULL) {
+			printf("[RESIZE-DEBUG] freeScaler: deferring buffer[%d] free = {%p, %p, %p}\n",
+				i, m_scaledYUV[i][0], m_scaledYUV[i][1], m_scaledYUV[i][2]);
+			fflush(stdout);
 		}
-		if (m_scaledYUV[i][1] != NULL) {
-			_aligned_free(m_scaledYUV[i][1]);
-			m_scaledYUV[i][1] = NULL;
-		}
-		if (m_scaledYUV[i][2] != NULL) {
-			_aligned_free(m_scaledYUV[i][2]);
-			m_scaledYUV[i][2] = NULL;
-		}
+
+		// Free any previously pending buffers first
+		if (m_pendingFreeYUV[i][0] != NULL) _aligned_free(m_pendingFreeYUV[i][0]);
+		if (m_pendingFreeYUV[i][1] != NULL) _aligned_free(m_pendingFreeYUV[i][1]);
+		if (m_pendingFreeYUV[i][2] != NULL) _aligned_free(m_pendingFreeYUV[i][2]);
+
+		// Move current buffers to pending
+		m_pendingFreeYUV[i][0] = m_scaledYUV[i][0];
+		m_pendingFreeYUV[i][1] = m_scaledYUV[i][1];
+		m_pendingFreeYUV[i][2] = m_scaledYUV[i][2];
+		m_scaledYUV[i][0] = NULL;
+		m_scaledYUV[i][1] = NULL;
+		m_scaledYUV[i][2] = NULL;
 	}
 
 	// Clear pitches (dimensions already cleared at start)
 	m_scaledPitch[0] = 0;
 	m_scaledPitch[1] = 0;
 	m_scaledPitch[2] = 0;
-	printf("[RESIZE-DEBUG] freeScaler: EXIT\n");
+	printf("[RESIZE-DEBUG] freeScaler: EXIT (deferred)\n");
 	fflush(stdout);
 }
