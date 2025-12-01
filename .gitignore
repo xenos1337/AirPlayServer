@@ -45,11 +45,6 @@ msbuild.err
 *.gch
 *.pch
 
-# Linker files
-*.ilk
-*.exp
-*.map
-
 # Debug files
 *.pdb
 *.idb
