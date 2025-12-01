@@ -113,7 +113,10 @@ amm-info@iis.fraunhofer.de
 #include "mips/fixmul_mips.h"
 
 #elif defined(__x86__)
+#if (defined(_MSC_VER) && defined(_M_IX86)) || (defined(__GNUC__) || defined(__gnu_linux__))
 #include "x86/fixmul_x86.h"
+#endif
+/* For x64 MSVC builds, skip the x86 header and use fallback functions below */
 
 #elif defined(__powerpc__)
 #include "ppc/fixmul_ppc.h"

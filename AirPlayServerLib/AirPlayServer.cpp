@@ -1,0 +1,6 @@
+// AirPlayServer.cpp
+
+void fnAirPlayServer()
+{
+}
+

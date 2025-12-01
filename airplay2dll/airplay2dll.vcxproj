@@ -87,17 +87,17 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>AIRPLAY2_EXPORTS;_DEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>AIRPLAYSERVER_EXPORTS;_DEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)airplay2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)AirPlayServerLib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\plist\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget);C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0</AdditionalLibraryDirectories>
-      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;airplay2.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;AirPlayServer.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /e include\*.* $(SolutionDir)AirPlayServer\include\
@@ -113,17 +113,17 @@ xcopy /y /e $(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll $(SolutionD
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>AIRPLAY2_EXPORTS;WIN32;_DEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>AIRPLAYSERVER_EXPORTS;WIN32;_DEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)airplay2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)AirPlayServerLib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\plist\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget);C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0</AdditionalLibraryDirectories>
-      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;airplay2.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;AirPlayServer.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /e include\*.* $(SolutionDir)AirPlayServer\include\
@@ -141,10 +141,10 @@ xcopy /y /e $(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll $(SolutionD
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>AIRPLAY2_EXPORTS;WIN32;NDEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>AIRPLAYSERVER_EXPORTS;WIN32;NDEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)airplay2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)AirPlayServerLib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -153,7 +153,7 @@ xcopy /y /e $(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll $(SolutionD
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\plist\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget);C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0</AdditionalLibraryDirectories>
-      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;airplay2.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;AirPlayServer.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/SAFESEH:NO %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <PostBuildEvent>
@@ -172,10 +172,10 @@ xcopy /y /e $(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll $(SolutionD
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>AIRPLAY2_EXPORTS;NDEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>AIRPLAYSERVER_EXPORTS;NDEBUG;AIRPLAY2DLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)airplay2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.;include;$(SolutionDir)external\ffmpeg\include;$(SolutionDir)AirPlayServerLib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -184,7 +184,7 @@ xcopy /y /e $(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll $(SolutionD
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\plist\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget);C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0</AdditionalLibraryDirectories>
-      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;airplay2.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;AirPlayServer.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /e include\*.* $(SolutionDir)AirPlayServer\include\

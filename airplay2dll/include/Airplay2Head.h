@@ -1,9 +1,9 @@
 #pragma once
 
-#ifdef AIRPLAY2_EXPORTS
-#define AIRPLAY2_API __declspec(dllexport)
+#ifdef AIRPLAYSERVER_EXPORTS
+#define AIRPLAYSERVER_API __declspec(dllexport)
 #else
-#define AIRPLAY2_API __declspec(dllimport)
+#define AIRPLAYSERVER_API __declspec(dllimport)
 #pragma comment(lib, "airplay2dll.lib")
 #endif
 
@@ -22,9 +22,9 @@ public:
 	virtual void log(int level, const char* msg) = 0;
 };
 
-AIRPLAY2_API void* fgServerStart(const char serverName[AIRPLAY_NAME_LEN], 
+AIRPLAYSERVER_API void* fgServerStart(const char serverName[AIRPLAY_NAME_LEN], 
 	unsigned int raopPort, unsigned int airplayPort,
 	IAirServerCallback* callback);
-AIRPLAY2_API void fgServerStop(void* handle);
+AIRPLAYSERVER_API void fgServerStop(void* handle);
 
-AIRPLAY2_API float fgServerScale(void* handle, float fRatio);
+AIRPLAYSERVER_API float fgServerScale(void* handle, float fRatio);
