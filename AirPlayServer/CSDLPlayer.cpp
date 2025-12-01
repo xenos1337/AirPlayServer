@@ -883,19 +883,22 @@ void CSDLPlayer::resizeWindow(int width, int height)
 		return;
 	}
 
-	m_bResizing = true;
-	printf("[RESIZE-DEBUG] resizeWindow: m_bResizing set to true\n");
-	fflush(stdout);
-
-	m_windowWidth = width;
-	m_windowHeight = height;
-
-	// Need to recreate YUV overlay when surface changes
+	// Acquire mutex FIRST before modifying any shared state
+	// This prevents race conditions with the callback thread
 	printf("[RESIZE-DEBUG] resizeWindow: acquiring mutex...\n");
 	fflush(stdout);
 	CAutoLock oLock(m_mutexVideo, "resizeWindow");
 	printf("[RESIZE-DEBUG] resizeWindow: mutex acquired\n");
 	fflush(stdout);
+
+	// NOW set the resizing flag (inside mutex to ensure callback sees consistent state)
+	m_bResizing = true;
+	printf("[RESIZE-DEBUG] resizeWindow: m_bResizing set to true\n");
+	fflush(stdout);
+
+	// Update dimensions inside mutex
+	m_windowWidth = width;
+	m_windowHeight = height;
 	
 	// Free old overlay, video buffer and scaler before recreating surface
 	if (m_yuv != NULL) {
@@ -975,34 +978,36 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 		width, height, m_windowWidth, m_windowHeight);
 	fflush(stdout);
 
-	// Set resizing flag to prevent callback thread from accessing resources
-	m_bResizing = true;
-	printf("[RESIZE-DEBUG] handleLiveResize: m_bResizing set to true\n");
-	fflush(stdout);
-
+	// Early validation (don't need mutex for this)
 	if (width <= 0 || height <= 0) {
 		printf("[RESIZE-DEBUG] handleLiveResize: ABORT - invalid dimensions\n");
 		fflush(stdout);
-		m_bResizing = false;
 		return;
 	}
 
-	if (width == m_windowWidth && height == m_windowHeight) {
-		printf("[RESIZE-DEBUG] handleLiveResize: ABORT - same dimensions\n");
-		fflush(stdout);
-		m_bResizing = false;
-		return;
-	}
-
-	m_windowWidth = width;
-	m_windowHeight = height;
-	printf("[RESIZE-DEBUG] handleLiveResize: dimensions updated to %dx%d\n", width, height);
-	fflush(stdout);
-
+	// Acquire mutex FIRST before checking or modifying any shared state
 	printf("[RESIZE-DEBUG] handleLiveResize: acquiring mutex...\n");
 	fflush(stdout);
 	CAutoLock oLock(m_mutexVideo, "handleLiveResize");
 	printf("[RESIZE-DEBUG] handleLiveResize: mutex acquired\n");
+	fflush(stdout);
+
+	// Check inside mutex to ensure consistent state
+	if (width == m_windowWidth && height == m_windowHeight) {
+		printf("[RESIZE-DEBUG] handleLiveResize: ABORT - same dimensions\n");
+		fflush(stdout);
+		return;
+	}
+
+	// NOW set the resizing flag (inside mutex)
+	m_bResizing = true;
+	printf("[RESIZE-DEBUG] handleLiveResize: m_bResizing set to true\n");
+	fflush(stdout);
+
+	// Update dimensions inside mutex
+	m_windowWidth = width;
+	m_windowHeight = height;
+	printf("[RESIZE-DEBUG] handleLiveResize: dimensions updated to %dx%d\n", width, height);
 	fflush(stdout);
 
 	// Free old overlay, video buffer and scaler before recreating surface
@@ -1759,14 +1764,20 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	m_srcHeight = srcH;
 
 	// Allocate scaled YUV buffers with proper alignment (double-buffered)
+	// YUV420 format: UV planes have half the width and height of Y plane
+	// Use ceiling division for odd dimensions: (n + 1) / 2
+	int uvWidth = (dstW + 1) / 2;
+	int uvHeight = (dstH + 1) / 2;
+
 	m_scaledPitch[0] = ((dstW + 31) >> 5) << 5;        // Y pitch (32-byte aligned for AVX)
-	m_scaledPitch[1] = ((dstW / 2 + 31) >> 5) << 5;    // U pitch
+	m_scaledPitch[1] = ((uvWidth + 31) >> 5) << 5;     // U pitch (32-byte aligned)
 	m_scaledPitch[2] = m_scaledPitch[1];               // V pitch
-	printf("[RESIZE-DEBUG] initScaler: pitches = {%d, %d, %d}\n", m_scaledPitch[0], m_scaledPitch[1], m_scaledPitch[2]);
+	printf("[RESIZE-DEBUG] initScaler: pitches = {%d, %d, %d}, uvDim=%dx%d\n",
+		m_scaledPitch[0], m_scaledPitch[1], m_scaledPitch[2], uvWidth, uvHeight);
 	fflush(stdout);
 
 	int ySize = m_scaledPitch[0] * dstH;
-	int uvSize = m_scaledPitch[1] * (dstH / 2);
+	int uvSize = m_scaledPitch[1] * uvHeight;  // Use ceiling-divided height for UV planes
 	printf("[RESIZE-DEBUG] initScaler: allocating buffers ySize=%d uvSize=%d\n", ySize, uvSize);
 	fflush(stdout);
 
