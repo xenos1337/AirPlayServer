@@ -90,7 +90,7 @@
       <PreprocessorDefinitions>WIN32;_CRT_SECURE_NO_WARNINGS;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libFDK\include\x86;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -105,7 +105,7 @@
       <PreprocessorDefinitions>WIN32;_CRT_SECURE_NO_WARNINGS;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libFDK\include\x86;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -122,7 +122,7 @@
       <PreprocessorDefinitions>WIN32;_CRT_SECURE_NO_WARNINGS;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libFDK\include\x86;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -141,7 +141,7 @@
       <PreprocessorDefinitions>WIN32;_CRT_SECURE_NO_WARNINGS;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>lib\ed25519;lib\fdk-aac\libAACdec\include;lib\fdk-aac\libAACenc\include;lib\fdk-aac\libArithCoding\include;lib\fdk-aac\libDRCdec\include;lib\fdk-aac\libFDK\include;lib\fdk-aac\libFDK\include\x86;lib\fdk-aac\libMpegTPDec\include;lib\fdk-aac\libMpegTPEnc\include;lib\fdk-aac\libPCMutils\include;lib\fdk-aac\libSACdec\include;lib\fdk-aac\libSACenc\include;lib\fdk-aac\libSBRdec\include;lib\fdk-aac\libSBRenc\include;lib\fdk-aac\libSYS\include;lib\fdk-aac\win32;$(SolutionDir)external;lib;lib\crypto;lib\curve25519;lib\playfair;include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
