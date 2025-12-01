@@ -27,7 +27,6 @@ bld/
 *.VC.db
 *.VC.VC.opendb
 .vs/
-*.vcxproj.filters
 *.aps
 
 # Build logs
