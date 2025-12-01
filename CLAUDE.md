@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
-This is a Visual Studio 2019+ C++ project. Open `airplay2-win.sln` and build:
+This is a Visual Studio 2019+ C++ project. Open `AirPlayServer.sln` and build:
 
 ```
 # From Visual Studio
@@ -13,7 +13,7 @@ F5 (Run with debugging)
 Ctrl+F5 (Run without debugging)
 
 # From Developer Command Prompt (x64)
-msbuild airplay2-win.sln /p:Configuration=Debug /p:Platform=x64
+msbuild AirPlayServer.sln /p:Configuration=Debug /p:Platform=x64
 ```
 
 Output location: `x64\Debug\AirPlayServer.exe`
@@ -24,8 +24,8 @@ Output location: `x64\Debug\AirPlayServer.exe`
 
 ### Solution Structure (Build Order)
 
-1. **airplay2** (static lib) - Core AirPlay 2 protocol implementation in C
-2. **airplay2dll** (DLL) - Wraps airplay2 with FFmpeg decoding, exposes C++ API
+1. **AirPlayServerLib** (static lib) - Core AirPlay 2 protocol implementation in C
+2. **airplay2dll** (DLL) - Wraps AirPlayServerLib with FFmpeg decoding, exposes C++ API
 3. **dnssd** (static lib) - mDNS/Bonjour service discovery
 4. **AirPlayServer** (exe) - Windows GUI application using SDL + ImGui
 
@@ -52,7 +52,7 @@ Network → raop.c/airplay.c → FgAirplayChannel (FFmpeg H.264→YUV)
 | `CAirServer.cpp` | Wraps airplay2dll, starts server with hostname |
 | `CAirServerCallback.cpp` | Routes AirPlay events to player |
 
-### Protocol Layer (airplay2/lib/)
+### Protocol Layer (AirPlayServerLib/lib/)
 
 | File | Purpose |
 |------|---------|

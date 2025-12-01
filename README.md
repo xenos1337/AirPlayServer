@@ -25,7 +25,7 @@ A high-performance AirPlay receiver for Windows with real-time video streaming a
 
 2. **Open in Visual Studio**
    - Launch Visual Studio 2019 or later
-   - Open `airplay2-win.sln`
+   - Open `AirPlayServer.sln`
 
 3. **Set Startup Project**
    - Right-click on `AirPlayServer` in Solution Explorer
@@ -85,13 +85,13 @@ Quality presets can be changed in real-time from both the home screen and the ov
 ## 📁 Project Structure
 
 ```
-airplay2-win/
+AirPlayServer/
 ├── AirPlayServer/          # Main application
 │   ├── CSDLPlayer.cpp      # Video/audio player and rendering
 │   ├── CImGuiManager.cpp   # UI overlay management
 │   ├── CAirServer.cpp      # AirPlay server wrapper
 │   └── CAirServerCallback.cpp  # AirPlay event handlers
-├── airplay2/               # Core AirPlay 2 protocol implementation
+├── AirPlayServerLib/       # Core AirPlay 2 protocol implementation
 │   └── lib/                # Protocol handlers, crypto, codecs
 ├── airplay2dll/            # AirPlay 2 DLL wrapper
 ├── dnssd/                  # mDNS/Bonjour service discovery
