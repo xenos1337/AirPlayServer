@@ -22,7 +22,7 @@
     <VCProjectVersion>16.0</VCProjectVersion>
     <ProjectGuid>{54FE79F9-FA82-4BFD-99A2-5CE9DEB1D356}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>AirPlayServer</RootNamespace>
+    <RootNamespace>AirPlayLib</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
