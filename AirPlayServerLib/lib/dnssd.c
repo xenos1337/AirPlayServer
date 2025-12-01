@@ -24,6 +24,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#include <stdint.h>
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -35,14 +36,14 @@
 #include "compat.h"
 #include "utils.h"
 
-#define MAX_DEVICEID 18
-#define MAX_SERVNAME 256
-#define MAX_INTERFACES 16
-
 #ifdef WIN32
 #include <iphlpapi.h>
 #pragma comment(lib, "iphlpapi.lib")
 #endif
+
+#define MAX_DEVICEID 18
+#define MAX_SERVNAME 256
+#define MAX_INTERFACES 16
 
 /* Structure to hold network interface information */
 typedef struct {
