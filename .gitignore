@@ -57,6 +57,8 @@ msbuild.err
 *.so
 *.dylib
 
+imgui.ini
+
 # IntelliSense
 *.VC.opendb
 ipch/
