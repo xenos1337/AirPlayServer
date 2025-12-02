@@ -49,14 +49,6 @@ msbuild.err
 *.pdb
 *.idb
 
-# Executables
-*.exe
-*.out
-*.app
-*.dll
-*.so
-*.dylib
-
 # IntelliSense
 *.VC.opendb
 ipch/
