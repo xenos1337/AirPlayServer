@@ -728,25 +728,93 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 					if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: checking overlay m_yuv=%p\n", m_yuv);
 					if (m_yuv != NULL && m_yuv->w == dstW && m_yuv->h == dstH &&
 						SDL_LockYUVOverlay(m_yuv) == 0) {
-						if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: copying to overlay\n");
-						// Fast bulk copy of scaled YUV to overlay
-						// Y plane - single memcpy per row
-						for (int y = 0; y < dstH; y++) {
-							memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
-								m_scaledYUV[writeIdx][0] + y * m_scaledPitch[0], dstW);
+
+						// =============================================================
+						// ROW-BY-ROW YUV COPY WITH PITCH HANDLING
+						// =============================================================
+						//
+						// PROBLEM: FFmpeg aligns buffers to 32-byte boundaries for SIMD.
+						//          SDL overlays may have different (often tighter) pitches.
+						//          If we ignore the pitch difference, diagonal shear occurs.
+						//
+						// SOLUTION: Copy each row separately, using:
+						//   - Source pitch to advance the READ pointer (skip FFmpeg padding)
+						//   - Dest pitch to advance the WRITE pointer
+						//   - Copy only the valid pixel bytes (not the padding)
+						//
+						// MEMORY LAYOUT EXAMPLE (width=207, srcPitch=224, dstPitch=207):
+						//
+						//   FFmpeg Buffer (srcPitch=224):
+						//   Row 0: [207 valid bytes][17 padding]  <- offset 0
+						//   Row 1: [207 valid bytes][17 padding]  <- offset 224
+						//   Row 2: [207 valid bytes][17 padding]  <- offset 448
+						//
+						//   SDL Overlay (dstPitch=207):
+						//   Row 0: [207 bytes]  <- offset 0
+						//   Row 1: [207 bytes]  <- offset 207
+						//   Row 2: [207 bytes]  <- offset 414
+						// =============================================================
+
+						// Get dimensions
+						const int yHeight = dstH;
+						const int uvHeight = (dstH + 1) / 2;  // Ceiling division for odd heights
+
+						// Get pitches (stride) for pointer arithmetic
+						const int srcPitchY = m_scaledPitch[0];   // FFmpeg Y pitch (e.g., 224)
+						const int srcPitchUV = m_scaledPitch[1];  // FFmpeg UV pitch (e.g., 128)
+						const int dstPitchY = m_yuv->pitches[0];  // SDL Y pitch (e.g., 207)
+						const int dstPitchUV = m_yuv->pitches[1]; // SDL UV pitch (e.g., 103)
+
+						// Calculate bytes to copy per row (MINIMUM of visual width and dest pitch)
+						// This prevents writing past row boundaries
+						const int yBytesToCopy = (dstW < dstPitchY) ? dstW : dstPitchY;
+						const int uvLogicalWidth = (dstW + 1) / 2;  // Ceiling division
+						const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
+
+						// Get buffer pointers
+						uint8_t* dstY = m_yuv->pixels[0];
+						uint8_t* dstU = m_yuv->pixels[1];
+						uint8_t* dstV = m_yuv->pixels[2];
+						const uint8_t* srcY_base = m_scaledYUV[writeIdx][0];
+						const uint8_t* srcU_base = m_scaledYUV[writeIdx][1];
+						const uint8_t* srcV_base = m_scaledYUV[writeIdx][2];
+
+						// Log on every frame during resize debugging
+						static int lastLoggedWidth = 0;
+						if (dstW != lastLoggedWidth || verboseLog) {
+							printf("[PITCH-DEBUG] SCALING COPY: dstW=%d, dstH=%d\n", dstW, dstH);
+							printf("[PITCH-DEBUG]   Y: srcPitch=%d, dstPitch=%d, bytesToCopy=%d\n",
+								srcPitchY, dstPitchY, yBytesToCopy);
+							printf("[PITCH-DEBUG]   UV: srcPitch=%d, dstPitch=%d, bytesToCopy=%d, uvHeight=%d\n",
+								srcPitchUV, dstPitchUV, uvBytesToCopy, uvHeight);
+							fflush(stdout);
+							lastLoggedWidth = dstW;
 						}
-						// U/V planes - combined loop
-						for (int y = 0; y < dstH / 2; y++) {
-							memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
-								m_scaledYUV[writeIdx][1] + y * m_scaledPitch[1], dstW / 2);
-							memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
-								m_scaledYUV[writeIdx][2] + y * m_scaledPitch[2], dstW / 2);
+
+						// ===== Y PLANE: Row-by-row copy =====
+						for (int row = 0; row < yHeight; row++) {
+							uint8_t* dstRow = dstY + (row * dstPitchY);
+							const uint8_t* srcRow = srcY_base + (row * srcPitchY);
+							memcpy(dstRow, srcRow, yBytesToCopy);
+						}
+
+						// ===== U PLANE: Row-by-row copy =====
+						for (int row = 0; row < uvHeight; row++) {
+							uint8_t* dstRow = dstU + (row * dstPitchUV);
+							const uint8_t* srcRow = srcU_base + (row * srcPitchUV);
+							memcpy(dstRow, srcRow, uvBytesToCopy);
+						}
+
+						// ===== V PLANE: Row-by-row copy =====
+						for (int row = 0; row < uvHeight; row++) {
+							uint8_t* dstRow = dstV + (row * dstPitchUV);
+							const uint8_t* srcRow = srcV_base + (row * srcPitchUV);
+							memcpy(dstRow, srcRow, uvBytesToCopy);
 						}
 
 						SDL_UnlockYUVOverlay(m_yuv);
 						m_lastFramePTS = data->pts;
 						m_hasNewFrame = true;
-						if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: frame copied to overlay\n");
 
 						// Swap write buffer for next frame
 						InterlockedExchange(&m_writeBuffer, 1 - writeIdx);
@@ -757,9 +825,8 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 					m_swsCtx, m_scaledWidth, m_scaledHeight, dstW, dstH);
 			}
 		} else if (dstW > 0 && dstH > 0) {
-			if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: DIRECT PATH (no scaling)\n");
-			// DIRECT PATH: 1:1 pixel mapping - direct copy without scaling (crisp and fast)
-			// Already inside mutex
+			// DIRECT PATH: 1:1 pixel mapping - direct copy without scaling
+			// This path is taken when display size matches video size exactly
 
 			// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
 			if (m_hasNewFrame) {
@@ -767,17 +834,64 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 			} else if (m_yuv != NULL &&
 				m_yuv->w == (int)data->width && m_yuv->h == (int)data->height &&
 				SDL_LockYUVOverlay(m_yuv) == 0) {
-				// Y plane
-				for (unsigned int y = 0; y < data->height; y++) {
-					memcpy(m_yuv->pixels[0] + y * m_yuv->pitches[0],
-						srcY + y * data->pitch[0], data->width);
+
+				// =============================================================
+				// ROW-BY-ROW YUV COPY (DIRECT PATH - No Scaling)
+				// Same pitch-aware logic as scaling path
+				// =============================================================
+
+				// Get dimensions
+				const int yHeight = data->height;
+				const int uvHeight = (data->height + 1) / 2;
+
+				// Get pitches for pointer arithmetic
+				const int srcPitchY = data->pitch[0];    // Input Y pitch
+				const int srcPitchUV = data->pitch[1];   // Input UV pitch
+				const int dstPitchY = m_yuv->pitches[0]; // SDL Y pitch
+				const int dstPitchUV = m_yuv->pitches[1]; // SDL UV pitch
+
+				// Calculate bytes to copy (minimum of visual width and dest pitch)
+				const int visualWidth = data->width;
+				const int yBytesToCopy = (visualWidth < dstPitchY) ? visualWidth : dstPitchY;
+				const int uvLogicalWidth = (visualWidth + 1) / 2;
+				const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
+
+				// Get buffer pointers
+				uint8_t* dstY = m_yuv->pixels[0];
+				uint8_t* dstU = m_yuv->pixels[1];
+				uint8_t* dstV = m_yuv->pixels[2];
+
+				// Log when dimensions change
+				static int lastDirectWidth = 0;
+				if (visualWidth != lastDirectWidth || verboseLog) {
+					printf("[PITCH-DEBUG] DIRECT COPY: width=%d, height=%d\n", visualWidth, yHeight);
+					printf("[PITCH-DEBUG]   Y: srcPitch=%d, dstPitch=%d, bytesToCopy=%d\n",
+						srcPitchY, dstPitchY, yBytesToCopy);
+					printf("[PITCH-DEBUG]   UV: srcPitch=%d, dstPitch=%d, bytesToCopy=%d\n",
+						srcPitchUV, dstPitchUV, uvBytesToCopy);
+					fflush(stdout);
+					lastDirectWidth = visualWidth;
 				}
-				// U/V planes - combined loop
-				for (unsigned int y = 0; y < data->height / 2; y++) {
-					memcpy(m_yuv->pixels[1] + y * m_yuv->pitches[1],
-						srcU + y * data->pitch[1], data->width / 2);
-					memcpy(m_yuv->pixels[2] + y * m_yuv->pitches[2],
-						srcV + y * data->pitch[2], data->width / 2);
+
+				// ===== Y PLANE: Row-by-row copy =====
+				for (int row = 0; row < yHeight; row++) {
+					uint8_t* dstRow = dstY + (row * dstPitchY);
+					const uint8_t* srcRow = srcY + (row * srcPitchY);
+					memcpy(dstRow, srcRow, yBytesToCopy);
+				}
+
+				// ===== U PLANE: Row-by-row copy =====
+				for (int row = 0; row < uvHeight; row++) {
+					uint8_t* dstRow = dstU + (row * dstPitchUV);
+					const uint8_t* srcRow = srcU + (row * srcPitchUV);
+					memcpy(dstRow, srcRow, uvBytesToCopy);
+				}
+
+				// ===== V PLANE: Row-by-row copy =====
+				for (int row = 0; row < uvHeight; row++) {
+					uint8_t* dstRow = dstV + (row * dstPitchUV);
+					const uint8_t* srcRow = srcV + (row * srcPitchUV);
+					memcpy(dstRow, srcRow, uvBytesToCopy);
 				}
 
 				SDL_UnlockYUVOverlay(m_yuv);

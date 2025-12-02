@@ -32,15 +32,17 @@ Output location: `x64\Debug\AirPlayServer.exe`
 ### Threading Model
 
 - **Main Thread**: SDL event loop, ImGui rendering, display presentation (`CSDLPlayer::loopEvents`)
-- **Callback Thread**: Receives AirPlay frames, writes to off-screen buffer (`outputVideo`)
+- **Callback Thread**: Receives AirPlay frames, copies to source buffer (`outputVideo`)
+- **Scaling Thread**: Background YUV scaling with double-buffered output (`ScalingThreadProc`)
 - **Audio Thread**: SDL audio callback pulls from queue (`sdlAudioCallback`)
 
 ### Key Data Flow
 
 ```
 Network → raop.c/airplay.c → FgAirplayChannel (FFmpeg H.264→YUV)
-       → CAirServerCallback → CSDLPlayer::outputVideo (YUV→RGB to m_videoBuffer)
-       → Main thread blits m_videoBuffer to m_surface → ImGui overlay → SDL_Flip
+       → CAirServerCallback → CSDLPlayer::outputVideo (copy to m_srcYUV)
+       → Scaling thread (m_srcYUV → m_scaledYUV double-buffer)
+       → Main thread blits scaled buffer → ImGui overlay → SDL_Flip
 ```
 
 ### Core Classes (AirPlayServer/)
@@ -48,7 +50,7 @@ Network → raop.c/airplay.c → FgAirplayChannel (FFmpeg H.264→YUV)
 | File | Purpose |
 |------|---------|
 | `CSDLPlayer.cpp` | Video/audio rendering, window management, fullscreen toggle |
-| `CImGuiManager.cpp` | ImGui overlay (home screen, connection status) |
+| `CImGuiManager.cpp` | ImGui overlay (home screen, connection status, quality presets) |
 | `CAirServer.cpp` | Wraps airplay2dll, starts server with hostname |
 | `CAirServerCallback.cpp` | Routes AirPlay events to player |
 
@@ -65,9 +67,21 @@ Network → raop.c/airplay.c → FgAirplayChannel (FFmpeg H.264→YUV)
 
 ### DLL Interface (airplay2dll/)
 
-`FgAirplayChannel.cpp` handles:
-- FFmpeg H.264 decoding with low-latency flags
-- YUV frame output via `IAirServerCallback` interface
+`FgAirplayChannel.cpp` handles FFmpeg H.264 decoding with low-latency flags.
+
+**Exported API** (Airplay2Head.h):
+```cpp
+void* fgServerStart(const char serverName[128], unsigned int raopPort,
+                    unsigned int airplayPort, IAirServerCallback* callback);
+void fgServerStop(void* handle);
+float fgServerScale(void* handle, float fRatio);
+```
+
+**Callback Interface** (`IAirServerCallback`):
+- `connected()` / `disconnected()` - Connection lifecycle
+- `outputVideo(SFgVideoFrame*)` - Decoded YUV420 frame delivery
+- `outputAudio(SFgAudioFrame*)` - Decoded audio samples
+- `videoPlay()` / `videoGetPlayInfo()` - URL-based video playback
 
 ## External Dependencies
 
@@ -77,17 +91,36 @@ Pre-built libraries in `external/`:
 - **Dear ImGui**: UI overlay
 - **FDK-AAC**: AAC audio decoding
 
+## Quality Presets
+
+Defined in `CImGuiManager.h` (`EQualityPreset`):
+
+| Preset | FPS | Scaling Algorithm | Use Case |
+|--------|-----|-------------------|----------|
+| `QUALITY_GOOD` | 30 | SWS_LANCZOS | Best visual quality |
+| `QUALITY_BALANCED` | 60 | SWS_FAST_BILINEAR | Default, balanced |
+| `QUALITY_FAST` | 60 | SWS_POINT (nearest) | Lowest latency |
+
 ## Key Constants
 
-- Frame rate: 30 FPS (locked in main loop)
-- AirPlay port: 5001
-- Mirror port: 7001
+- AirPlay port: 5001 (RAOP), 7001 (mirroring)
 - Max resolution: 1920x1080
 - Double-click threshold: 400ms (fullscreen toggle)
+- Cursor auto-hide: 5000ms
+
+## UI Controls
+
+- **H**: Toggle overlay visibility
+- **F** / **Double-click**: Toggle fullscreen
+- Mouse movement shows cursor (auto-hides after 5s)
 
 ## Synchronization
 
 Critical mutex usage:
-- `m_mutexVideo`: Protects `m_videoBuffer` during frame writes and blits
+- `m_mutexVideo`: Protects source buffer copy in `outputVideo`
 - `m_mutexAudio`: Protects audio queue access
-- Frame handoff uses `m_hasNewFrame` flag with mutex protection
+
+Double-buffered scaling (lockless producer-consumer):
+- `m_writeBuffer` / `m_readBuffer`: Indices for double-buffered `m_scaledYUV[2][3]`
+- `m_bufferReady`: Atomic flag for frame availability
+- `m_scalingEvent`: Signals scaling thread when new source data arrives
