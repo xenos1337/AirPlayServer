@@ -92,6 +92,14 @@ void CAirServerCallback::videoPlay(char* url, double volume, double startPos)
 	printf("Play: %s", url);
 }
 
+void CAirServerCallback::setVolume(float volume, const char* remoteName, const char* remoteDeviceId)
+{
+	if (m_pPlayer)
+	{
+		m_pPlayer->setVolume(volume);
+	}
+}
+
 double dbDuration = 10000;
 double dbPosition = 0;
 void CAirServerCallback::videoGetPlayInfo(double* duration, double* position, double* rate)

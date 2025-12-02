@@ -251,6 +251,17 @@ void FgAirplayServer::disconnected(void* cls, const char* remoteName, const char
 
 void FgAirplayServer::audio_set_volume(void* cls, void* session, float volume, const char* remoteName, const char* remoteDeviceId)
 {
+	FgAirplayServer* pServer = (FgAirplayServer*)cls;
+	if (!pServer)
+	{
+		return;
+	}
+
+	if (pServer->m_pCallback != NULL)
+	{
+		// Forward volume to callback (volume is in dB: 0.0 = max, -144.0 = mute)
+		pServer->m_pCallback->setVolume(volume, remoteName, remoteDeviceId);
+	}
 }
 
 void FgAirplayServer::audio_set_metadata(void* cls, void* session, const void* buffer, int buflen, const char* remoteName, const char* remoteDeviceId)

@@ -21,6 +21,9 @@ public:
 	virtual void videoPlay(char* url, double volume, double startPos);
 	virtual void videoGetPlayInfo(double* duration, double* position, double* rate);
 
+	// Audio volume control (volume in dB: 0.0 = max, -144.0 = mute)
+	virtual void setVolume(float volume, const char* remoteName, const char* remoteDeviceId);
+
 	virtual void log(int level, const char* msg);
 
 protected:

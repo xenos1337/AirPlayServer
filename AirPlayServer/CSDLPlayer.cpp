@@ -1,6 +1,7 @@
 #include "CSDLPlayer.h"
 #include <stdio.h>
 #include <malloc.h>  // For _aligned_malloc/_aligned_free
+#include <math.h>    // For powf() in volume conversion
 #include "CAutoLock.h"
 
 // Static instance pointer for window procedure callback
@@ -84,6 +85,7 @@ CSDLPlayer::CSDLPlayer()
 	m_b1to1PixelMode = true;  // Enable 1:1 pixel mode by default for crisp video
 	m_mutexAudio = CreateMutex(NULL, FALSE, NULL);
 	m_mutexVideo = CreateMutex(NULL, FALSE, NULL);
+	m_audioVolume = SDL_MIX_MAXVOLUME;  // Full volume (128) by default
 	s_instance = this;
 	
 	// Initialize video statistics
@@ -1642,6 +1644,9 @@ void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
 	int streamPos = 0;
 	memset(stream, 0, len);
 
+	// Get current volume (volatile read is atomic for int)
+	int volume = pThis->m_audioVolume;
+
 	CAutoLock oLock(pThis->m_mutexAudio, "sdlAudioCallback");
 	while (!pThis->m_queueAudio.empty())
 	{
@@ -1649,8 +1654,9 @@ void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
 		int pos = pAudioFrame->dataTotal - pAudioFrame->dataLeft;
 		int readLen = min(pAudioFrame->dataLeft, needLen);
 
-		//SDL_MixAudio(stream + streamPos, pAudioFrame->data + pos, readLen, 100);
-		memcpy(stream + streamPos, pAudioFrame->data + pos, readLen);
+		// Apply volume using SDL_MixAudio (mixes src into dst with volume control)
+		// Volume range: 0 = mute, 128 = full volume (SDL_MIX_MAXVOLUME)
+		SDL_MixAudio(stream + streamPos, pAudioFrame->data + pos, readLen, volume);
 
 		pAudioFrame->dataLeft -= readLen;
 		needLen -= readLen;
@@ -1664,6 +1670,35 @@ void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
 			break;
 		}
 	}
+}
+
+void CSDLPlayer::setVolume(float dbVolume)
+{
+	// Convert AirPlay volume (dB) to SDL volume (0-128)
+	// AirPlay volume: 0.0 dB = max, -144.0 dB = mute
+	// SDL volume: 0 = mute, 128 = max (SDL_MIX_MAXVOLUME)
+
+	int sdlVolume;
+	if (dbVolume <= -144.0f) {
+		// Mute
+		sdlVolume = 0;
+	} else if (dbVolume >= 0.0f) {
+		// Max volume
+		sdlVolume = SDL_MIX_MAXVOLUME;
+	} else {
+		// Convert dB to linear scale: linear = 10^(dB/20)
+		// dB range: -144 to 0 -> linear range: ~0 to 1
+		float linear = powf(10.0f, dbVolume / 20.0f);
+		sdlVolume = (int)(linear * SDL_MIX_MAXVOLUME);
+
+		// Clamp to valid range
+		if (sdlVolume < 0) sdlVolume = 0;
+		if (sdlVolume > SDL_MIX_MAXVOLUME) sdlVolume = SDL_MIX_MAXVOLUME;
+	}
+
+	m_audioVolume = sdlVolume;
+	printf("[VOLUME] AirPlay volume: %.1f dB -> SDL volume: %d/%d\n",
+		dbVolume, sdlVolume, SDL_MIX_MAXVOLUME);
 }
 
 void CSDLPlayer::showWindow()

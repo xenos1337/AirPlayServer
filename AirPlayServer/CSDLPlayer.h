@@ -55,6 +55,9 @@ public:
 	void unInitAudio();
 	static void sdlAudioCallback(void* userdata, Uint8* stream, int len);
 
+	// Audio volume control (volume in dB: 0.0 = max, -144.0 = mute)
+	void setVolume(float dbVolume);
+
 	// Window visibility control
 	void showWindow();
 	void hideWindow();
@@ -99,6 +102,7 @@ public:
 	SAudioFrameQueue m_queueAudio;
 	HANDLE m_mutexAudio;
 	HANDLE m_mutexVideo;
+	volatile int m_audioVolume;  // SDL volume (0-128, where 128 = SDL_MIX_MAXVOLUME)
 
 	SDL_Event m_evtVideoSizeChange;
 
