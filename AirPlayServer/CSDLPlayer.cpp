@@ -374,6 +374,9 @@ void CSDLPlayer::loopEvents()
 						CAutoLock oLock(m_mutexVideo, "createOverlay");
 						int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
 						int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+						// YUV420 requires even dimensions to avoid chroma drift
+						overlayW = overlayW & ~1;
+						overlayH = overlayH & ~1;
 
 						m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
 
@@ -682,6 +685,22 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		// Read display rect inside mutex for thread safety
 		int dstW = m_displayRect.w;
 		int dstH = m_displayRect.h;
+
+		// ===== YUV420 ALIGNMENT FIX =====
+		// YUV420 subsamples chroma (U/V) by 2 in both dimensions.
+		// If width or height is ODD, the UV plane math becomes:
+		//   529 / 2 = 264.5 → truncated to 264
+		// This causes a 1-byte drift per row, creating diagonal color artifacts.
+		// FIX: Force dimensions to be EVEN numbers using bitwise AND with ~1
+		int originalDstW = dstW;
+		int originalDstH = dstH;
+		dstW = dstW & ~1;  // Round down to nearest even (e.g., 529 -> 528)
+		dstH = dstH & ~1;  // Round down to nearest even (e.g., 1153 -> 1152)
+		if (originalDstW != dstW || originalDstH != dstH) {
+			printf("[YUV420-FIX] Adjusted odd dimensions: %dx%d -> %dx%d\n",
+				originalDstW, originalDstH, dstW, dstH);
+		}
+
 		if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: dstW=%d dstH=%d srcW=%d srcH=%d\n", dstW, dstH, data->width, data->height);
 
 		// Check if we need to scale (display size differs from video size)
@@ -757,61 +776,77 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 						//   Row 2: [207 bytes]  <- offset 414
 						// =============================================================
 
+						// =============================================================
+						// BULLETPROOF ROW-BY-ROW YUV COPY
+						// Uses explicit pointer increments - NO index multiplication!
+						// =============================================================
+
 						// Get dimensions
 						const int yHeight = dstH;
-						const int uvHeight = (dstH + 1) / 2;  // Ceiling division for odd heights
+						const int uvHeight = (dstH + 1) / 2;
 
-						// Get pitches (stride) for pointer arithmetic
-						const int srcPitchY = m_scaledPitch[0];   // FFmpeg Y pitch (e.g., 224)
-						const int srcPitchUV = m_scaledPitch[1];  // FFmpeg UV pitch (e.g., 128)
-						const int dstPitchY = m_yuv->pitches[0];  // SDL Y pitch (e.g., 207)
-						const int dstPitchUV = m_yuv->pitches[1]; // SDL UV pitch (e.g., 103)
+						// Get pitches (stride) - THE KEY VALUES
+						const int srcPitchY = m_scaledPitch[0];   // FFmpeg Y pitch (aligned, e.g., 352)
+						const int srcPitchUV = m_scaledPitch[1];  // FFmpeg UV pitch (aligned)
+						const int dstPitchY = m_yuv->pitches[0];  // SDL Y pitch (e.g., 331)
+						const int dstPitchUV = m_yuv->pitches[1]; // SDL UV pitch
 
-						// Calculate bytes to copy per row (MINIMUM of visual width and dest pitch)
-						// This prevents writing past row boundaries
+						// Bytes to copy per row = min(visual_width, dst_pitch)
 						const int yBytesToCopy = (dstW < dstPitchY) ? dstW : dstPitchY;
-						const int uvLogicalWidth = (dstW + 1) / 2;  // Ceiling division
+						const int uvLogicalWidth = (dstW + 1) / 2;
 						const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
 
-						// Get buffer pointers
-						uint8_t* dstY = m_yuv->pixels[0];
-						uint8_t* dstU = m_yuv->pixels[1];
-						uint8_t* dstV = m_yuv->pixels[2];
-						const uint8_t* srcY_base = m_scaledYUV[writeIdx][0];
-						const uint8_t* srcU_base = m_scaledYUV[writeIdx][1];
-						const uint8_t* srcV_base = m_scaledYUV[writeIdx][2];
-
-						// Log on every frame during resize debugging
+						// ALWAYS log pitch info for debugging
 						static int lastLoggedWidth = 0;
-						if (dstW != lastLoggedWidth || verboseLog) {
-							printf("[PITCH-DEBUG] SCALING COPY: dstW=%d, dstH=%d\n", dstW, dstH);
-							printf("[PITCH-DEBUG]   Y: srcPitch=%d, dstPitch=%d, bytesToCopy=%d\n",
+						if (dstW != lastLoggedWidth) {
+							printf("=== YUV COPY CONFIG ===\n");
+							printf("  Visual: %d x %d\n", dstW, dstH);
+							printf("  Y Plane:  srcPitch=%d, dstPitch=%d, copy=%d bytes/row\n",
 								srcPitchY, dstPitchY, yBytesToCopy);
-							printf("[PITCH-DEBUG]   UV: srcPitch=%d, dstPitch=%d, bytesToCopy=%d, uvHeight=%d\n",
+							printf("  UV Plane: srcPitch=%d, dstPitch=%d, copy=%d bytes/row, height=%d\n",
 								srcPitchUV, dstPitchUV, uvBytesToCopy, uvHeight);
+							printf("  Padding per Y row: %d bytes (will be SKIPPED)\n", srcPitchY - yBytesToCopy);
+							printf("=======================\n");
 							fflush(stdout);
 							lastLoggedWidth = dstW;
 						}
 
-						// ===== Y PLANE: Row-by-row copy =====
-						for (int row = 0; row < yHeight; row++) {
-							uint8_t* dstRow = dstY + (row * dstPitchY);
-							const uint8_t* srcRow = srcY_base + (row * srcPitchY);
-							memcpy(dstRow, srcRow, yBytesToCopy);
+						// ===== Y PLANE: Explicit pointer-increment copy =====
+						{
+							const uint8_t* srcPtr = m_scaledYUV[writeIdx][0];
+							uint8_t* dstPtr = m_yuv->pixels[0];
+
+							for (int row = 0; row < yHeight; row++) {
+								memcpy(dstPtr, srcPtr, yBytesToCopy);
+
+								// EXPLICIT INCREMENT: Advance pointers by their respective pitches
+								srcPtr += srcPitchY;   // Skip padding in source (e.g., +352)
+								dstPtr += dstPitchY;   // Advance in destination (e.g., +331)
+							}
 						}
 
-						// ===== U PLANE: Row-by-row copy =====
-						for (int row = 0; row < uvHeight; row++) {
-							uint8_t* dstRow = dstU + (row * dstPitchUV);
-							const uint8_t* srcRow = srcU_base + (row * srcPitchUV);
-							memcpy(dstRow, srcRow, uvBytesToCopy);
+						// ===== U PLANE: Explicit pointer-increment copy =====
+						{
+							const uint8_t* srcPtr = m_scaledYUV[writeIdx][1];
+							uint8_t* dstPtr = m_yuv->pixels[1];
+
+							for (int row = 0; row < uvHeight; row++) {
+								memcpy(dstPtr, srcPtr, uvBytesToCopy);
+								srcPtr += srcPitchUV;
+								dstPtr += dstPitchUV;
+							}
 						}
 
-						// ===== V PLANE: Row-by-row copy =====
-						for (int row = 0; row < uvHeight; row++) {
-							uint8_t* dstRow = dstV + (row * dstPitchUV);
-							const uint8_t* srcRow = srcV_base + (row * srcPitchUV);
-							memcpy(dstRow, srcRow, uvBytesToCopy);
+						// ===== V PLANE: Explicit pointer-increment copy =====
+						{
+							const uint8_t* srcPtr = m_scaledYUV[writeIdx][2];
+							uint8_t* dstPtr = m_yuv->pixels[2];
+
+							for (int row = 0; row < uvHeight; row++) {
+								memcpy(dstPtr, srcPtr, uvBytesToCopy);
+								srcPtr += srcPitchUV;
+								dstPtr += dstPitchUV;
+							}
 						}
 
 						SDL_UnlockYUVOverlay(m_yuv);
@@ -838,62 +873,75 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 				SDL_LockYUVOverlay(m_yuv) == 0) {
 
 				// =============================================================
-				// ROW-BY-ROW YUV COPY (DIRECT PATH - No Scaling)
-				// Same pitch-aware logic as scaling path
+				// BULLETPROOF ROW-BY-ROW YUV COPY (DIRECT PATH)
+				// Uses explicit pointer increments - NO index multiplication!
 				// =============================================================
 
 				// Get dimensions
 				const int yHeight = data->height;
 				const int uvHeight = (data->height + 1) / 2;
 
-				// Get pitches for pointer arithmetic
-				const int srcPitchY = data->pitch[0];    // Input Y pitch
+				// Get pitches (stride) - THE KEY VALUES
+				const int srcPitchY = data->pitch[0];    // Input Y pitch (from FFmpeg)
 				const int srcPitchUV = data->pitch[1];   // Input UV pitch
 				const int dstPitchY = m_yuv->pitches[0]; // SDL Y pitch
 				const int dstPitchUV = m_yuv->pitches[1]; // SDL UV pitch
 
-				// Calculate bytes to copy (minimum of visual width and dest pitch)
+				// Bytes to copy per row = min(visual_width, dst_pitch)
 				const int visualWidth = data->width;
 				const int yBytesToCopy = (visualWidth < dstPitchY) ? visualWidth : dstPitchY;
 				const int uvLogicalWidth = (visualWidth + 1) / 2;
 				const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
 
-				// Get buffer pointers
-				uint8_t* dstY = m_yuv->pixels[0];
-				uint8_t* dstU = m_yuv->pixels[1];
-				uint8_t* dstV = m_yuv->pixels[2];
-
-				// Log when dimensions change
+				// ALWAYS log pitch info for debugging
 				static int lastDirectWidth = 0;
-				if (visualWidth != lastDirectWidth || verboseLog) {
-					printf("[PITCH-DEBUG] DIRECT COPY: width=%d, height=%d\n", visualWidth, yHeight);
-					printf("[PITCH-DEBUG]   Y: srcPitch=%d, dstPitch=%d, bytesToCopy=%d\n",
+				if (visualWidth != lastDirectWidth) {
+					printf("=== DIRECT YUV COPY CONFIG ===\n");
+					printf("  Visual: %d x %d\n", visualWidth, yHeight);
+					printf("  Y Plane:  srcPitch=%d, dstPitch=%d, copy=%d bytes/row\n",
 						srcPitchY, dstPitchY, yBytesToCopy);
-					printf("[PITCH-DEBUG]   UV: srcPitch=%d, dstPitch=%d, bytesToCopy=%d\n",
-						srcPitchUV, dstPitchUV, uvBytesToCopy);
+					printf("  UV Plane: srcPitch=%d, dstPitch=%d, copy=%d bytes/row, height=%d\n",
+						srcPitchUV, dstPitchUV, uvBytesToCopy, uvHeight);
+					printf("  Padding per Y row: %d bytes (will be SKIPPED)\n", srcPitchY - yBytesToCopy);
+					printf("==============================\n");
 					fflush(stdout);
 					lastDirectWidth = visualWidth;
 				}
 
-				// ===== Y PLANE: Row-by-row copy =====
-				for (int row = 0; row < yHeight; row++) {
-					uint8_t* dstRow = dstY + (row * dstPitchY);
-					const uint8_t* srcRow = srcY + (row * srcPitchY);
-					memcpy(dstRow, srcRow, yBytesToCopy);
+				// ===== Y PLANE: Explicit pointer-increment copy =====
+				{
+					const uint8_t* srcPtr = srcY;
+					uint8_t* dstPtr = m_yuv->pixels[0];
+
+					for (int row = 0; row < yHeight; row++) {
+						memcpy(dstPtr, srcPtr, yBytesToCopy);
+						srcPtr += srcPitchY;   // SKIP PADDING
+						dstPtr += dstPitchY;
+					}
 				}
 
-				// ===== U PLANE: Row-by-row copy =====
-				for (int row = 0; row < uvHeight; row++) {
-					uint8_t* dstRow = dstU + (row * dstPitchUV);
-					const uint8_t* srcRow = srcU + (row * srcPitchUV);
-					memcpy(dstRow, srcRow, uvBytesToCopy);
+				// ===== U PLANE: Explicit pointer-increment copy =====
+				{
+					const uint8_t* srcPtr = srcU;
+					uint8_t* dstPtr = m_yuv->pixels[1];
+
+					for (int row = 0; row < uvHeight; row++) {
+						memcpy(dstPtr, srcPtr, uvBytesToCopy);
+						srcPtr += srcPitchUV;
+						dstPtr += dstPitchUV;
+					}
 				}
 
-				// ===== V PLANE: Row-by-row copy =====
-				for (int row = 0; row < uvHeight; row++) {
-					uint8_t* dstRow = dstV + (row * dstPitchUV);
-					const uint8_t* srcRow = srcV + (row * srcPitchUV);
-					memcpy(dstRow, srcRow, uvBytesToCopy);
+				// ===== V PLANE: Explicit pointer-increment copy =====
+				{
+					const uint8_t* srcPtr = srcV;
+					uint8_t* dstPtr = m_yuv->pixels[2];
+
+					for (int row = 0; row < uvHeight; row++) {
+						memcpy(dstPtr, srcPtr, uvBytesToCopy);
+						srcPtr += srcPitchUV;
+						dstPtr += dstPitchUV;
+					}
 				}
 
 				SDL_UnlockYUVOverlay(m_yuv);
@@ -1051,6 +1099,9 @@ void CSDLPlayer::resizeWindow(int width, int height)
 	if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
 		int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
 		int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+		// YUV420 requires even dimensions to avoid chroma drift
+		overlayW = overlayW & ~1;
+		overlayH = overlayH & ~1;
 
 		m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
 
@@ -1184,6 +1235,9 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 	if (m_videoWidth > 0 && m_videoHeight > 0) {
 		int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
 		int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+		// YUV420 requires even dimensions to avoid chroma drift
+		overlayW = overlayW & ~1;
+		overlayH = overlayH & ~1;
 		printf("[RESIZE-DEBUG] handleLiveResize: creating YUV overlay %dx%d\n", overlayW, overlayH);
 		fflush(stdout);
 
@@ -1401,6 +1455,9 @@ void CSDLPlayer::toggleFullscreen()
 		if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
 			int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
 			int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+			// YUV420 requires even dimensions to avoid chroma drift
+			overlayW = overlayW & ~1;
+			overlayH = overlayH & ~1;
 
 			m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
 			if (m_yuv != NULL) {
@@ -1481,6 +1538,9 @@ void CSDLPlayer::toggleFullscreen()
 		if (m_videoWidth > 0 && m_videoHeight > 0 && m_surface != NULL) {
 			int overlayW = (m_displayRect.w > 0) ? m_displayRect.w : m_videoWidth;
 			int overlayH = (m_displayRect.h > 0) ? m_displayRect.h : m_videoHeight;
+			// YUV420 requires even dimensions to avoid chroma drift
+			overlayW = overlayW & ~1;
+			overlayH = overlayH & ~1;
 
 			m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
 			if (m_yuv != NULL) {
@@ -1675,30 +1735,44 @@ void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
 void CSDLPlayer::setVolume(float dbVolume)
 {
 	// Convert AirPlay volume (dB) to SDL volume (0-128)
-	// AirPlay volume: 0.0 dB = max, -144.0 dB = mute
+	//
+	// AirPlay volume range (actual from iOS):
+	//   0.0 dB   = Maximum volume (slider at 100%)
+	//   -30.0 dB = Minimum volume (slider at 0%) - THIS IS THE FLOOR, NOT -144!
+	//
 	// SDL volume: 0 = mute, 128 = max (SDL_MIX_MAXVOLUME)
+	//
+	// IMPORTANT: AirPlay sends -30 dB when muted, NOT -144 dB!
+	// So we must treat -30 dB (and below) as mute.
+
+	const float AIRPLAY_MIN_DB = -30.0f;  // iPhone sends this at 0% volume
+	const float AIRPLAY_MAX_DB = 0.0f;    // iPhone sends this at 100% volume
 
 	int sdlVolume;
-	if (dbVolume <= -144.0f) {
-		// Mute
+
+	if (dbVolume <= AIRPLAY_MIN_DB) {
+		// MUTE: -30 dB or lower = complete silence
 		sdlVolume = 0;
-	} else if (dbVolume >= 0.0f) {
-		// Max volume
+	} else if (dbVolume >= AIRPLAY_MAX_DB) {
+		// MAX: 0 dB or higher = full volume
 		sdlVolume = SDL_MIX_MAXVOLUME;
 	} else {
-		// Convert dB to linear scale: linear = 10^(dB/20)
-		// dB range: -144 to 0 -> linear range: ~0 to 1
-		float linear = powf(10.0f, dbVolume / 20.0f);
-		sdlVolume = (int)(linear * SDL_MIX_MAXVOLUME);
+		// SCALE: Map -30 dB to 0 dB -> 0 to 128 (linear in dB space)
+		// This gives a natural volume curve that matches the iPhone slider
+		//
+		// Formula: sdlVolume = ((dbVolume - minDB) / (maxDB - minDB)) * 128
+		//          sdlVolume = ((dbVolume + 30) / 30) * 128
+		float normalized = (dbVolume - AIRPLAY_MIN_DB) / (AIRPLAY_MAX_DB - AIRPLAY_MIN_DB);
+		sdlVolume = (int)(normalized * SDL_MIX_MAXVOLUME);
 
-		// Clamp to valid range
+		// Clamp to valid range (safety)
 		if (sdlVolume < 0) sdlVolume = 0;
 		if (sdlVolume > SDL_MIX_MAXVOLUME) sdlVolume = SDL_MIX_MAXVOLUME;
 	}
 
 	m_audioVolume = sdlVolume;
-	printf("[VOLUME] AirPlay volume: %.1f dB -> SDL volume: %d/%d\n",
-		dbVolume, sdlVolume, SDL_MIX_MAXVOLUME);
+	printf("[VOLUME] AirPlay: %.1f dB -> SDL: %d/%d (%.0f%%)\n",
+		dbVolume, sdlVolume, SDL_MIX_MAXVOLUME, (sdlVolume * 100.0f) / SDL_MIX_MAXVOLUME);
 }
 
 void CSDLPlayer::showWindow()
