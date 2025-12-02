@@ -57,8 +57,6 @@ msbuild.err
 *.so
 *.dylib
 
-imgui.ini
-
 # IntelliSense
 *.VC.opendb
 ipch/
@@ -148,3 +146,4 @@ out/
 
 # Last build state
 *.lastbuildstate
+AirPlayServer/imgui.ini
