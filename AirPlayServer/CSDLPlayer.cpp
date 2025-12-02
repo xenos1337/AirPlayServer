@@ -85,7 +85,7 @@ CSDLPlayer::CSDLPlayer()
 	m_b1to1PixelMode = true;  // Enable 1:1 pixel mode by default for crisp video
 	m_mutexAudio = CreateMutex(NULL, FALSE, NULL);
 	m_mutexVideo = CreateMutex(NULL, FALSE, NULL);
-	m_audioVolume = SDL_MIX_MAXVOLUME;  // Full volume (128) by default
+	m_audioVolume = SDL_MIX_MAXVOLUME / 2;  // Half volume by default
 	s_instance = this;
 	
 	// Initialize video statistics
