@@ -4,8 +4,79 @@
 #include <math.h>    // For powf() in volume conversion
 #include "CAutoLock.h"
 
+// Windows Core Audio API for querying system audio device format
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <functiondiscoverykeys_devpkey.h>
+
+// Link against required libraries
+#pragma comment(lib, "ole32.lib")
+
 // Static instance pointer for window procedure callback
 CSDLPlayer* CSDLPlayer::s_instance = NULL;
+
+// Query the Windows default audio device's sample rate using WASAPI
+// Returns 0 on failure, otherwise the sample rate (e.g., 44100, 48000, 96000)
+static DWORD GetSystemAudioSampleRate()
+{
+	DWORD sampleRate = 0;
+	HRESULT hr;
+
+	// Initialize COM (required for WASAPI)
+	hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+	bool comInitialized = SUCCEEDED(hr) || hr == S_FALSE || hr == RPC_E_CHANGED_MODE;
+
+	if (!comInitialized) {
+		return 0;
+	}
+
+	IMMDeviceEnumerator* pEnumerator = NULL;
+	IMMDevice* pDevice = NULL;
+	IAudioClient* pAudioClient = NULL;
+	WAVEFORMATEX* pwfx = NULL;
+
+	// Create device enumerator
+	hr = CoCreateInstance(
+		__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL,
+		__uuidof(IMMDeviceEnumerator), (void**)&pEnumerator);
+
+	if (FAILED(hr)) {
+		goto cleanup;
+	}
+
+	// Get default audio endpoint (speakers)
+	hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &pDevice);
+	if (FAILED(hr)) {
+		goto cleanup;
+	}
+
+	// Activate audio client
+	hr = pDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, NULL, (void**)&pAudioClient);
+	if (FAILED(hr)) {
+		goto cleanup;
+	}
+
+	// Get the device's mix format (native format)
+	hr = pAudioClient->GetMixFormat(&pwfx);
+	if (FAILED(hr)) {
+		goto cleanup;
+	}
+
+	sampleRate = pwfx->nSamplesPerSec;
+
+cleanup:
+	if (pwfx) CoTaskMemFree(pwfx);
+	if (pAudioClient) pAudioClient->Release();
+	if (pDevice) pDevice->Release();
+	if (pEnumerator) pEnumerator->Release();
+
+	// Only uninitialize COM if we successfully initialized it (not if it was already initialized)
+	if (hr != RPC_E_CHANGED_MODE) {
+		CoUninitialize();
+	}
+
+	return sampleRate;
+}
 
 // Helper function to clamp value to 0-255
 static inline Uint8 ClampByte(int value) {
@@ -86,8 +157,29 @@ CSDLPlayer::CSDLPlayer()
 	m_mutexAudio = CreateMutex(NULL, FALSE, NULL);
 	m_mutexVideo = CreateMutex(NULL, FALSE, NULL);
 	m_audioVolume = SDL_MIX_MAXVOLUME / 2;  // Half volume by default
+
+	// Initialize audio quality tracking
+	m_audioUnderrunCount = 0;
+	m_audioDroppedFrames = 0;
+	m_audioFadeOut = false;
+	m_audioFadeOutSamples = 0;
+
+	// Initialize audio resampling
+	m_systemSampleRate = 0;
+	m_streamSampleRate = 0;
+	m_resampleBuffer = NULL;
+	m_resampleBufferSize = 0;
+	m_resamplePos = 0.0;
+	m_needsResampling = false;
+
+	// Initialize dynamic limiter
+	m_limiterGain = 1.0f;
+	m_peakLevel = 0.0f;
+	m_deviceVolumeNormalized = 0.5f;
+	m_autoAdjustEnabled = false;
+
 	s_instance = this;
-	
+
 	// Initialize video statistics
 	m_totalFrames = 0;
 	m_droppedFrames = 0;
@@ -149,18 +241,10 @@ CSDLPlayer::~CSDLPlayer()
 		SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)m_originalWndProc);
 	}
 
-	printf("[RESIZE-DEBUG] ~CSDLPlayer: calling freeScaler()\n");
-	fflush(stdout);
 	freeScaler();
-	printf("[RESIZE-DEBUG] ~CSDLPlayer: freeScaler() done\n");
-	fflush(stdout);
 
 	// Free any pending resources (safe now since server is stopped and no more callbacks)
-	printf("[RESIZE-DEBUG] ~CSDLPlayer: calling freePendingScalerResources()\n");
-	fflush(stdout);
 	freePendingScalerResources();
-	printf("[RESIZE-DEBUG] ~CSDLPlayer: freePendingScalerResources() done\n");
-	fflush(stdout);
 
 	unInit();
 
@@ -327,15 +411,10 @@ void CSDLPlayer::loopEvents()
 				unsigned int width = (unsigned int)(uintptr_t)event.user.data1;
 				unsigned int height = (unsigned int)(uintptr_t)event.user.data2;
 				if (width != m_videoWidth || height != m_videoHeight || m_yuv == NULL) {
-					printf("[RESIZE-DEBUG] VIDEO_SIZE_CHANGED_CODE: ENTER %dx%d (current: %dx%d)\n",
-						width, height, m_videoWidth, m_videoHeight);
-					fflush(stdout);
 
 					// IMPORTANT: Set resize flag FIRST to prevent outputVideo from creating
 					// new scalers during the entire resize operation
 					m_bResizing = true;
-					printf("[RESIZE-DEBUG] VIDEO_SIZE_CHANGED_CODE: m_bResizing set to true\n");
-					fflush(stdout);
 
 					// Video source size changed - recreate overlay and video buffer
 					{
@@ -349,11 +428,7 @@ void CSDLPlayer::loopEvents()
 							m_videoBuffer = NULL;
 						}
 						// Free scaler when video size changes
-						printf("[RESIZE-DEBUG] VIDEO_SIZE_CHANGED_CODE: calling freeScaler()\n");
-						fflush(stdout);
 						freeScaler();
-						printf("[RESIZE-DEBUG] VIDEO_SIZE_CHANGED_CODE: freeScaler() done\n");
-						fflush(stdout);
 
 						m_videoWidth = width;
 						m_videoHeight = height;
@@ -404,19 +479,13 @@ void CSDLPlayer::loopEvents()
 
 					// Now it's safe for outputVideo to create scalers again
 					m_bResizing = false;
-					printf("[RESIZE-DEBUG] VIDEO_SIZE_CHANGED_CODE: m_bResizing set to false\n");
-					fflush(stdout);
 
 					// Now resize window if needed (AFTER m_bResizing is cleared)
 					// This prevents the race condition where outputVideo creates a scaler
 					// that gets freed by resizeWindow
 					if (needsWindowResize) {
-						printf("[RESIZE-DEBUG] VIDEO_SIZE_CHANGED_CODE: calling resizeToVideoSize\n");
-						fflush(stdout);
 						resizeToVideoSize();
 					}
-					printf("[RESIZE-DEBUG] VIDEO_SIZE_CHANGED_CODE: EXIT\n");
-					fflush(stdout);
 				}
 			}
 			else if (event.user.code == SHOW_WINDOW_CODE) {
@@ -433,16 +502,9 @@ void CSDLPlayer::loopEvents()
 		case SDL_VIDEORESIZE: {
 			// This is now handled by WM_SIZE/WM_SIZING for live updates
 			// Just ensure final size is correct
-			printf("[RESIZE-DEBUG] SDL_VIDEORESIZE: %dx%d (current: %dx%d, resizing=%d)\n",
-				event.resize.w, event.resize.h, m_windowWidth, m_windowHeight, m_bResizing);
-			fflush(stdout);
 			if (event.resize.w != m_windowWidth || event.resize.h != m_windowHeight) {
-				printf("[RESIZE-DEBUG] SDL_VIDEORESIZE: calling resizeWindow\n");
-				fflush(stdout);
 				resizeWindow(event.resize.w, event.resize.h);
 			} else {
-				printf("[RESIZE-DEBUG] SDL_VIDEORESIZE: skipped (same dimensions)\n");
-				fflush(stdout);
 			}
 			break;
 		}
@@ -500,12 +562,7 @@ void CSDLPlayer::loopEvents()
 		// Only log when there's a pending resize that differs from current
 		if (pendingW >= 100 && pendingH >= 100 &&
 			(pendingW != m_windowWidth || pendingH != m_windowHeight)) {
-			printf("[RESIZE-DEBUG] loopEvents: TRIGGERING handleLiveResize - pending=%dx%d, current=%dx%d, resizing=%d\n",
-				pendingW, pendingH, m_windowWidth, m_windowHeight, m_bResizing);
-			fflush(stdout);
 			handleLiveResize(pendingW, pendingH);
-			printf("[RESIZE-DEBUG] loopEvents: handleLiveResize returned\n");
-			fflush(stdout);
 		}
 
 		// Handle disconnect transition (show black screen briefly)
@@ -527,9 +584,6 @@ void CSDLPlayer::loopEvents()
 				static int renderLogCounter = 0;
 				renderLogCounter++;
 				if (renderLogCounter % 60 == 0) {
-					printf("[RESIZE-DEBUG] renderLoop: displaying new frame, overlay=%p %dx%d, rect=(%d,%d,%d,%d)\n",
-						m_yuv, m_yuv ? m_yuv->w : 0, m_yuv ? m_yuv->h : 0,
-						m_displayRect.x, m_displayRect.y, m_displayRect.w, m_displayRect.h);
 				}
 				SDL_DisplayYUVOverlay(m_yuv, &m_displayRect);
 				m_hasNewFrame = false; // Mark frame as rendered immediately
@@ -557,7 +611,7 @@ void CSDLPlayer::loopEvents()
 				// Connected - show overlay with controls and video statistics
 				m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName,
 					m_videoWidth, m_videoHeight, m_currentFPS, m_currentBitrateMbps,
-					m_totalFrames, m_droppedFrames);
+					m_totalFrames, m_droppedFrames, m_totalBytes);
 			} else if (m_bDisconnecting) {
 				// Disconnecting - render nothing (show black screen)
 			} else {
@@ -579,6 +633,11 @@ void CSDLPlayer::loopEvents()
 				m_bCursorHidden = true;
 			}
 		}
+
+		// Sync audio settings between player and UI
+		m_autoAdjustEnabled = m_imgui.IsAutoAdjustEnabled();
+		m_imgui.SetDeviceVolume(m_deviceVolumeNormalized);  // Send device volume to UI
+		m_imgui.SetCurrentAudioLevel(m_peakLevel);
 
 		// Update quality preset for callback thread (thread-safe)
 		EQualityPreset currentPreset = m_imgui.GetQualityPreset();
@@ -612,7 +671,6 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 
 	// Skip video processing during resize to prevent race conditions
 	if (m_bResizing) {
-		printf("[RESIZE-DEBUG] outputVideo: SKIPPING (m_bResizing=true)\n");
 		return;
 	}
 
@@ -632,8 +690,6 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 
 	// Check if video source dimensions changed
 	if ((int)data->width != m_videoWidth || (int)data->height != m_videoHeight) {
-		printf("[RESIZE-DEBUG] outputVideo: video size changed from %dx%d to %dx%d\n",
-			m_videoWidth, m_videoHeight, data->width, data->height);
 		{
 			CAutoLock oLock(m_mutexVideo, "videoSizeChange");
 			if (NULL != m_yuv) {
@@ -667,15 +723,11 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	// SCALING/COPY PATH - all under mutex to prevent race with resize
 	static int frameCounter = 0;
 	frameCounter++;
-	bool verboseLog = (frameCounter % 60 == 0);  // Log every 60th frame during normal operation
 	{
-		if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: acquiring mutex...\n");
 		CAutoLock oLock(m_mutexVideo, "outputVideo");
-		if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: mutex acquired\n");
 
 		// Double-check resize flag inside mutex (may have changed since pre-mutex check)
 		if (m_bResizing) {
-			printf("[RESIZE-DEBUG] outputVideo: SKIPPING inside mutex (m_bResizing=true)\n");
 			return;
 		}
 
@@ -696,12 +748,6 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		int originalDstH = dstH;
 		dstW = dstW & ~1;  // Round down to nearest even (e.g., 529 -> 528)
 		dstH = dstH & ~1;  // Round down to nearest even (e.g., 1153 -> 1152)
-		if (originalDstW != dstW || originalDstH != dstH) {
-			printf("[YUV420-FIX] Adjusted odd dimensions: %dx%d -> %dx%d\n",
-				originalDstW, originalDstH, dstW, dstH);
-		}
-
-		if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: dstW=%d dstH=%d srcW=%d srcH=%d\n", dstW, dstH, data->width, data->height);
 
 		// Check if we need to scale (display size differs from video size)
 		bool needsScaling = (dstW != (int)data->width || dstH != (int)data->height);
@@ -709,21 +755,13 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		if (needsScaling && dstW > 0 && dstH > 0) {
 			// SCALING PATH
 			// Initialize/reinit scaler if needed
-			if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: SCALING PATH - calling initScaler(%d,%d,%d,%d)\n", data->width, data->height, dstW, dstH);
 			initScaler(data->width, data->height, dstW, dstH);
-			if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: initScaler returned, m_swsCtx=%p\n", m_swsCtx);
 
 			// Get write buffer for scaling
 			LONG writeIdx = InterlockedCompareExchange(&m_writeBuffer, 0, 0);
 			if (writeIdx < 0 || writeIdx > 1) writeIdx = 0;  // Safety check
 
 			// Verify all buffers are valid before scaling
-			if (verboseLog) {
-				printf("[RESIZE-DEBUG] outputVideo: checking buffers - swsCtx=%p, buf[%d]={%p,%p,%p}\n",
-					m_swsCtx, writeIdx, m_scaledYUV[writeIdx][0], m_scaledYUV[writeIdx][1], m_scaledYUV[writeIdx][2]);
-				printf("[RESIZE-DEBUG] outputVideo: scaledSize=%dx%d, expected=%dx%d\n",
-					m_scaledWidth, m_scaledHeight, dstW, dstH);
-			}
 
 			if (m_swsCtx != NULL &&
 				m_scaledYUV[writeIdx][0] != NULL &&
@@ -738,15 +776,12 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 					m_droppedFrames++;
 				} else {
 					// Scale directly from source to our buffer
-					if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: calling sws_scale\n");
 					const uint8_t* srcSlice[3] = { srcY, srcU, srcV };
 					int srcStride[3] = { (int)data->pitch[0], (int)data->pitch[1], (int)data->pitch[2] };
 					sws_scale(m_swsCtx, srcSlice, srcStride, 0, data->height,
 						m_scaledYUV[writeIdx], m_scaledPitch);
-					if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: sws_scale done\n");
 
 					// Copy to overlay - verify overlay dimensions match
-					if (verboseLog) printf("[RESIZE-DEBUG] outputVideo: checking overlay m_yuv=%p\n", m_yuv);
 					if (m_yuv != NULL && m_yuv->w == dstW && m_yuv->h == dstH &&
 						SDL_LockYUVOverlay(m_yuv) == 0) {
 
@@ -796,20 +831,6 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 						const int uvLogicalWidth = (dstW + 1) / 2;
 						const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
 
-						// ALWAYS log pitch info for debugging
-						static int lastLoggedWidth = 0;
-						if (dstW != lastLoggedWidth) {
-							printf("=== YUV COPY CONFIG ===\n");
-							printf("  Visual: %d x %d\n", dstW, dstH);
-							printf("  Y Plane:  srcPitch=%d, dstPitch=%d, copy=%d bytes/row\n",
-								srcPitchY, dstPitchY, yBytesToCopy);
-							printf("  UV Plane: srcPitch=%d, dstPitch=%d, copy=%d bytes/row, height=%d\n",
-								srcPitchUV, dstPitchUV, uvBytesToCopy, uvHeight);
-							printf("  Padding per Y row: %d bytes (will be SKIPPED)\n", srcPitchY - yBytesToCopy);
-							printf("=======================\n");
-							fflush(stdout);
-							lastLoggedWidth = dstW;
-						}
 
 						// ===== Y PLANE: Explicit pointer-increment copy =====
 						{
@@ -858,8 +879,6 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 					}
 				}
 			} else {
-				printf("[RESIZE-DEBUG] outputVideo: buffer validation FAILED - swsCtx=%p, scaledSize=%dx%d, expected=%dx%d\n",
-					m_swsCtx, m_scaledWidth, m_scaledHeight, dstW, dstH);
 			}
 		} else if (dstW > 0 && dstH > 0) {
 			// DIRECT PATH: 1:1 pixel mapping - direct copy without scaling
@@ -893,20 +912,6 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 				const int uvLogicalWidth = (visualWidth + 1) / 2;
 				const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
 
-				// ALWAYS log pitch info for debugging
-				static int lastDirectWidth = 0;
-				if (visualWidth != lastDirectWidth) {
-					printf("=== DIRECT YUV COPY CONFIG ===\n");
-					printf("  Visual: %d x %d\n", visualWidth, yHeight);
-					printf("  Y Plane:  srcPitch=%d, dstPitch=%d, copy=%d bytes/row\n",
-						srcPitchY, dstPitchY, yBytesToCopy);
-					printf("  UV Plane: srcPitch=%d, dstPitch=%d, copy=%d bytes/row, height=%d\n",
-						srcPitchUV, dstPitchUV, uvBytesToCopy, uvHeight);
-					printf("  Padding per Y row: %d bytes (will be SKIPPED)\n", srcPitchY - yBytesToCopy);
-					printf("==============================\n");
-					fflush(stdout);
-					lastDirectWidth = visualWidth;
-				}
 
 				// ===== Y PLANE: Explicit pointer-increment copy =====
 				{
@@ -996,25 +1001,81 @@ void CSDLPlayer::outputAudio(SFgAudioFrame* data)
 	}
 
 	SAudioFrame* dataClone = new SAudioFrame();
-	dataClone->dataTotal = data->dataLen;
 	dataClone->pts = data->pts;
-	dataClone->dataLeft = dataClone->dataTotal;
-	dataClone->data = new uint8_t[dataClone->dataTotal];
-	memcpy(dataClone->data, data->data, dataClone->dataTotal);
+
+	// Resample audio if needed (stream rate differs from system rate)
+	if (m_needsResampling && m_resampleBuffer && m_streamSampleRate > 0) {
+		// Linear interpolation resampling
+		int bytesPerSample = 2;  // 16-bit
+		int channels = data->channels;
+		int inSamples = data->dataLen / (channels * bytesPerSample);
+
+		// Calculate output samples based on sample rate ratio
+		double ratio = (double)m_systemSampleRate / (double)m_streamSampleRate;
+		int outSamples = (int)(inSamples * ratio + 0.5);
+
+		// Ensure we have enough buffer space
+		int outBufferSize = outSamples * channels * bytesPerSample;
+		if (outBufferSize > m_resampleBufferSize) {
+			m_resampleBuffer = (uint8_t*)realloc(m_resampleBuffer, outBufferSize);
+			m_resampleBufferSize = outBufferSize;
+		}
+
+		// Perform linear interpolation resampling
+		Sint16* inPtr = (Sint16*)data->data;
+		Sint16* outPtr = (Sint16*)m_resampleBuffer;
+		double step = 1.0 / ratio;  // Input step per output sample
+
+		for (int i = 0; i < outSamples; i++) {
+			double srcPos = i * step;
+			int srcIdx = (int)srcPos;
+			double frac = srcPos - srcIdx;
+
+			// Ensure we don't read past the end
+			if (srcIdx >= inSamples - 1) {
+				srcIdx = inSamples - 2;
+				if (srcIdx < 0) srcIdx = 0;
+				frac = 1.0;
+			}
+
+			// Linear interpolation for each channel
+			for (int ch = 0; ch < channels; ch++) {
+				Sint16 s1 = inPtr[srcIdx * channels + ch];
+				Sint16 s2 = (srcIdx + 1 < inSamples) ? inPtr[(srcIdx + 1) * channels + ch] : s1;
+				outPtr[i * channels + ch] = (Sint16)(s1 + (s2 - s1) * frac);
+			}
+		}
+
+		int convertedBytes = outSamples * channels * bytesPerSample;
+		dataClone->dataTotal = convertedBytes;
+		dataClone->dataLeft = convertedBytes;
+		dataClone->data = new uint8_t[convertedBytes];
+		memcpy(dataClone->data, m_resampleBuffer, convertedBytes);
+	} else {
+		// No resampling needed, copy directly
+		dataClone->dataTotal = data->dataLen;
+		dataClone->dataLeft = data->dataLen;
+		dataClone->data = new uint8_t[data->dataLen];
+		memcpy(dataClone->data, data->data, data->dataLen);
+	}
 
 	{
 		CAutoLock oLock(m_mutexAudio, "outputAudio");
 
 		// AUDIO QUEUE LIMITING: Prevent unbounded growth causing delay accumulation
-		// If queue exceeds 10 frames (~200ms at 48kHz), drop oldest frames
-		while (m_queueAudio.size() >= 10) {
+		// Use larger queue (20 frames ~400ms) for smoother playback with less dropping
+		while (m_queueAudio.size() >= AUDIO_QUEUE_MAX_FRAMES) {
 			SAudioFrame* oldFrame = m_queueAudio.front();
 			m_queueAudio.pop();
 			delete[] oldFrame->data;
 			delete oldFrame;
+			m_audioDroppedFrames++;
 		}
 
 		m_queueAudio.push(dataClone);
+
+		// Reset fade-out state when we have audio data
+		m_audioFadeOut = false;
 	}
 }
 
@@ -1037,28 +1098,18 @@ void CSDLPlayer::initVideo(int width, int height)
 
 void CSDLPlayer::resizeWindow(int width, int height)
 {
-	printf("[RESIZE-DEBUG] resizeWindow: ENTER width=%d height=%d\n", width, height);
-	fflush(stdout);
 
 	// Prevent re-entrancy
 	if (m_bResizing) {
-		printf("[RESIZE-DEBUG] resizeWindow: ABORT (already resizing)\n");
-		fflush(stdout);
 		return;
 	}
 
 	// Acquire mutex FIRST before modifying any shared state
 	// This prevents race conditions with the callback thread
-	printf("[RESIZE-DEBUG] resizeWindow: acquiring mutex...\n");
-	fflush(stdout);
 	CAutoLock oLock(m_mutexVideo, "resizeWindow");
-	printf("[RESIZE-DEBUG] resizeWindow: mutex acquired\n");
-	fflush(stdout);
 
 	// NOW set the resizing flag (inside mutex to ensure callback sees consistent state)
 	m_bResizing = true;
-	printf("[RESIZE-DEBUG] resizeWindow: m_bResizing set to true\n");
-	fflush(stdout);
 
 	// Update dimensions inside mutex
 	m_windowWidth = width;
@@ -1073,11 +1124,7 @@ void CSDLPlayer::resizeWindow(int width, int height)
 		SDL_FreeSurface(m_videoBuffer);
 		m_videoBuffer = NULL;
 	}
-	printf("[RESIZE-DEBUG] resizeWindow: calling freeScaler()\n");
-	fflush(stdout);
 	freeScaler();  // Free scaler since display rect will change
-	printf("[RESIZE-DEBUG] resizeWindow: freeScaler() done\n");
-	fflush(stdout);
 
 	// Recreate surface with new size
 	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
@@ -1131,105 +1178,63 @@ void CSDLPlayer::resizeWindow(int width, int height)
 	clearToBlack();
 	SDL_Flip(m_surface);
 
-	printf("[RESIZE-DEBUG] resizeWindow: setting m_bResizing to false\n");
-	fflush(stdout);
 	m_bResizing = false;
-	printf("[RESIZE-DEBUG] resizeWindow: EXIT\n");
-	fflush(stdout);
 }
 
 // Handle live resize from Windows messages (during drag)
 void CSDLPlayer::handleLiveResize(int width, int height)
 {
-	printf("[RESIZE-DEBUG] handleLiveResize: ENTER width=%d height=%d (current: %dx%d)\n",
-		width, height, m_windowWidth, m_windowHeight);
-	fflush(stdout);
 
 	// Early validation (don't need mutex for this)
 	if (width <= 0 || height <= 0) {
-		printf("[RESIZE-DEBUG] handleLiveResize: ABORT - invalid dimensions\n");
-		fflush(stdout);
 		return;
 	}
 
 	// Acquire mutex FIRST before checking or modifying any shared state
-	printf("[RESIZE-DEBUG] handleLiveResize: acquiring mutex...\n");
-	fflush(stdout);
 	CAutoLock oLock(m_mutexVideo, "handleLiveResize");
-	printf("[RESIZE-DEBUG] handleLiveResize: mutex acquired\n");
-	fflush(stdout);
 
 	// Check inside mutex to ensure consistent state
 	if (width == m_windowWidth && height == m_windowHeight) {
-		printf("[RESIZE-DEBUG] handleLiveResize: ABORT - same dimensions\n");
-		fflush(stdout);
 		return;
 	}
 
 	// NOW set the resizing flag (inside mutex)
 	m_bResizing = true;
-	printf("[RESIZE-DEBUG] handleLiveResize: m_bResizing set to true\n");
-	fflush(stdout);
 
 	// Update dimensions inside mutex
 	m_windowWidth = width;
 	m_windowHeight = height;
-	printf("[RESIZE-DEBUG] handleLiveResize: dimensions updated to %dx%d\n", width, height);
-	fflush(stdout);
 
 	// Free old overlay, video buffer and scaler before recreating surface
-	printf("[RESIZE-DEBUG] handleLiveResize: freeing YUV overlay (m_yuv=%p)\n", m_yuv);
-	fflush(stdout);
 	if (m_yuv != NULL) {
 		SDL_FreeYUVOverlay(m_yuv);
 		m_yuv = NULL;
 	}
-	printf("[RESIZE-DEBUG] handleLiveResize: freeing video buffer (m_videoBuffer=%p)\n", m_videoBuffer);
-	fflush(stdout);
 	if (m_videoBuffer != NULL) {
 		SDL_FreeSurface(m_videoBuffer);
 		m_videoBuffer = NULL;
 	}
-	printf("[RESIZE-DEBUG] handleLiveResize: calling freeScaler()\n");
-	fflush(stdout);
 	freeScaler();  // Free scaler since display rect will change
-	printf("[RESIZE-DEBUG] handleLiveResize: freeScaler() done\n");
-	fflush(stdout);
 
 	// Recreate surface with new size
-	printf("[RESIZE-DEBUG] handleLiveResize: calling SDL_SetVideoMode(%d, %d)\n", width, height);
-	fflush(stdout);
 	m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
-	printf("[RESIZE-DEBUG] handleLiveResize: SDL_SetVideoMode returned m_surface=%p\n", m_surface);
-	fflush(stdout);
 
 	// If surface creation failed, abort resize
 	if (m_surface == NULL) {
-		printf("[RESIZE-DEBUG] handleLiveResize: ABORT - surface creation failed\n");
-		fflush(stdout);
 		m_bResizing = false;
 		return;
 	}
 
 	// Recreate video buffer matching new window size
-	printf("[RESIZE-DEBUG] handleLiveResize: creating video buffer\n");
-	fflush(stdout);
 	m_videoBuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
 		m_surface->format->Rmask, m_surface->format->Gmask,
 		m_surface->format->Bmask, m_surface->format->Amask);
-	printf("[RESIZE-DEBUG] handleLiveResize: video buffer created=%p\n", m_videoBuffer);
-	fflush(stdout);
 	if (m_videoBuffer != NULL) {
 		SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 	}
 
 	// Recalculate display rect for new window size (needed for overlay size)
-	printf("[RESIZE-DEBUG] handleLiveResize: calculating display rect\n");
-	fflush(stdout);
 	calculateDisplayRect();
-	printf("[RESIZE-DEBUG] handleLiveResize: displayRect = (%d,%d,%d,%d)\n",
-		m_displayRect.x, m_displayRect.y, m_displayRect.w, m_displayRect.h);
-	fflush(stdout);
 
 	// Recreate YUV overlay at display rect size for high-quality scaling
 	if (m_videoWidth > 0 && m_videoHeight > 0) {
@@ -1238,39 +1243,25 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 		// YUV420 requires even dimensions to avoid chroma drift
 		overlayW = overlayW & ~1;
 		overlayH = overlayH & ~1;
-		printf("[RESIZE-DEBUG] handleLiveResize: creating YUV overlay %dx%d\n", overlayW, overlayH);
-		fflush(stdout);
 
 		m_yuv = SDL_CreateYUVOverlay(overlayW, overlayH, SDL_IYUV_OVERLAY, m_surface);
-		printf("[RESIZE-DEBUG] handleLiveResize: YUV overlay created=%p\n", m_yuv);
-		fflush(stdout);
 
 		// Initialize overlay to black (Y=0, U=128, V=128) to prevent green flicker
 		if (m_yuv != NULL) {
-			printf("[RESIZE-DEBUG] handleLiveResize: initializing overlay to black\n");
-			fflush(stdout);
 			SDL_LockYUVOverlay(m_yuv);
 			memset(m_yuv->pixels[0], 0, m_yuv->pitches[0] * m_yuv->h);           // Y = 0
 			memset(m_yuv->pixels[1], 128, m_yuv->pitches[1] * (m_yuv->h >> 1));  // U = 128
 			memset(m_yuv->pixels[2], 128, m_yuv->pitches[2] * (m_yuv->h >> 1));  // V = 128
 			SDL_UnlockYUVOverlay(m_yuv);
-			printf("[RESIZE-DEBUG] handleLiveResize: overlay initialized\n");
-			fflush(stdout);
 		}
 	}
 
 	// Re-acquire window handle after SDL_SetVideoMode (it may create a new window)
-	printf("[RESIZE-DEBUG] handleLiveResize: re-acquiring window handle\n");
-	fflush(stdout);
 	SDL_SysWMinfo wmInfo;
 	SDL_VERSION(&wmInfo.version);
 	if (SDL_GetWMInfo(&wmInfo) == 1) {
 		HWND newHwnd = wmInfo.window;
-		printf("[RESIZE-DEBUG] handleLiveResize: newHwnd=%p, m_hwnd=%p\n", newHwnd, m_hwnd);
-		fflush(stdout);
 		if (newHwnd != m_hwnd) {
-			printf("[RESIZE-DEBUG] handleLiveResize: window handle changed, re-subclassing\n");
-			fflush(stdout);
 			m_hwnd = newHwnd;
 			LONG_PTR classStyle = GetClassLongPtr(m_hwnd, GCL_STYLE);
 			SetClassLongPtr(m_hwnd, GCL_STYLE, classStyle | CS_DBLCLKS);
@@ -1279,31 +1270,23 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 	}
 
 	// Redraw - clear to black, video will be redrawn next frame
-	printf("[RESIZE-DEBUG] handleLiveResize: clearing to black and flipping\n");
-	fflush(stdout);
 	if (m_surface != NULL) {
 		SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
 		SDL_Flip(m_surface);
 	}
 
-	printf("[RESIZE-DEBUG] handleLiveResize: setting m_bResizing to false\n");
-	fflush(stdout);
 	m_bResizing = false;
-	printf("[RESIZE-DEBUG] handleLiveResize: EXIT\n");
-	fflush(stdout);
 }
 
 // Custom window procedure for live resize and double-click fullscreen
 LRESULT CALLBACK CSDLPlayer::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	if (s_instance == NULL) {
-		printf("[RESIZE-DEBUG] WindowProc: s_instance is NULL\n");
 		return DefWindowProc(hwnd, msg, wParam, lParam);
 	}
 
 	// Safety check: if this is for an old window handle, use default proc
 	if (hwnd != s_instance->m_hwnd || s_instance->m_originalWndProc == NULL) {
-		printf("[RESIZE-DEBUG] WindowProc: hwnd mismatch or no original proc (hwnd=%p, m_hwnd=%p)\n", hwnd, s_instance->m_hwnd);
 		return DefWindowProc(hwnd, msg, wParam, lParam);
 	}
 
@@ -1314,8 +1297,6 @@ LRESULT CALLBACK CSDLPlayer::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 			if (wParam != SIZE_MINIMIZED) {
 				int width = LOWORD(lParam);
 				int height = HIWORD(lParam);
-				printf("[RESIZE-DEBUG] WM_SIZE received: %dx%d (current: %dx%d, resizing=%d)\n",
-					width, height, s_instance->m_windowWidth, s_instance->m_windowHeight, s_instance->m_bResizing);
 				// Minimum size check to prevent issues with tiny windows
 				if (width >= 100 && height >= 100) {
 					s_instance->requestResize(width, height);
@@ -1335,25 +1316,16 @@ LRESULT CALLBACK CSDLPlayer::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 
 void CSDLPlayer::toggleFullscreen()
 {
-	printf("[RESIZE-DEBUG] toggleFullscreen: ENTER (hwnd=%p, fullscreen=%d, resizing=%d)\n",
-		m_hwnd, m_bFullscreen, m_bResizing);
-	fflush(stdout);
 
 	if (m_hwnd == NULL) {
-		printf("[RESIZE-DEBUG] toggleFullscreen: ABORT (no hwnd)\n");
-		fflush(stdout);
 		return;
 	}
 
 	// Prevent re-entrancy
 	if (m_bResizing) {
-		printf("[RESIZE-DEBUG] toggleFullscreen: ABORT (already resizing)\n");
-		fflush(stdout);
 		return;
 	}
 	m_bResizing = true;
-	printf("[RESIZE-DEBUG] toggleFullscreen: m_bResizing set to true\n");
-	fflush(stdout);
 	
 	if (!m_bFullscreen) {
 		// Save current window state
@@ -1396,11 +1368,7 @@ void CSDLPlayer::toggleFullscreen()
 			SDL_FreeSurface(m_videoBuffer);
 			m_videoBuffer = NULL;
 		}
-		printf("[RESIZE-DEBUG] toggleFullscreen(enter): calling freeScaler()\n");
-		fflush(stdout);
 		freeScaler();  // Free scaler since display rect will change
-		printf("[RESIZE-DEBUG] toggleFullscreen(enter): freeScaler() done\n");
-		fflush(stdout);
 
 		m_surface = SDL_SetVideoMode(screenWidth, screenHeight, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_NOFRAME);
 		if (m_surface == NULL) {
@@ -1498,11 +1466,7 @@ void CSDLPlayer::toggleFullscreen()
 			SDL_FreeSurface(m_videoBuffer);
 			m_videoBuffer = NULL;
 		}
-		printf("[RESIZE-DEBUG] toggleFullscreen(exit): calling freeScaler()\n");
-		fflush(stdout);
 		freeScaler();  // Free scaler since display rect will change
-		printf("[RESIZE-DEBUG] toggleFullscreen(exit): freeScaler() done\n");
-		fflush(stdout);
 
 		m_surface = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
 		m_windowWidth = width;
@@ -1643,20 +1607,50 @@ void CSDLPlayer::initAudio(SFgAudioFrame* data)
 		unInitAudio();
 	}
 	if (!m_bAudioInited) {
+		// Query system audio device sample rate (only once)
+		if (m_systemSampleRate == 0) {
+			m_systemSampleRate = GetSystemAudioSampleRate();
+			if (m_systemSampleRate == 0) {
+				// Fallback to 48kHz if query fails
+				m_systemSampleRate = 48000;
+			}
+		}
+
+		m_streamSampleRate = data->sampleRate;
+		DWORD outputSampleRate = m_systemSampleRate;
+
+
+		// Set up audio resampler if stream rate differs from system rate
+		if (m_streamSampleRate != m_systemSampleRate) {
+
+			m_needsResampling = true;
+			m_resamplePos = 0.0;
+
+			// Allocate resample buffer (enough for 1 second of audio)
+			m_resampleBufferSize = m_systemSampleRate * data->channels * 2;  // 16-bit samples
+			m_resampleBuffer = (uint8_t*)malloc(m_resampleBufferSize);
+
+			if (!m_resampleBuffer) {
+				m_needsResampling = false;
+				outputSampleRate = m_streamSampleRate;  // Fallback
+			}
+		}
+
 		SDL_AudioSpec wanted_spec, obtained_spec;
-		wanted_spec.freq = data->sampleRate;
+		wanted_spec.freq = outputSampleRate;
 		wanted_spec.format = AUDIO_S16SYS;
 		wanted_spec.channels = data->channels;
 		wanted_spec.silence = 0;
-		wanted_spec.samples = 512;  // Reduced from 1920 to 512 for lower latency (~10.7ms at 48kHz vs 40ms)
+		wanted_spec.samples = AUDIO_BUFFER_SAMPLES;  // 1024 samples - balanced latency/quality
 		wanted_spec.callback = sdlAudioCallback;
 		wanted_spec.userdata = this;
 
 		if (SDL_OpenAudio(&wanted_spec, &obtained_spec) < 0)
 		{
-			printf("can't open audio.\n");
+			printf("Cannot open audio: %s\n", SDL_GetError());
 			return;
 		}
+
 
 		SDL_PauseAudio(1);
 
@@ -1669,7 +1663,7 @@ void CSDLPlayer::initAudio(SFgAudioFrame* data)
 			m_fileWav = fopen("airplay-audio.wav", "wb");
 		}
 	}
-	if (m_queueAudio.size() > 2) {  // Reduced from 5 to 2 for lower latency (~21ms vs 200ms initial delay)
+	if (m_queueAudio.size() >= AUDIO_QUEUE_START_THRESHOLD) {  // Wait for enough frames before starting
 		SDL_PauseAudio(0);
 	}
 }
@@ -1695,6 +1689,23 @@ void CSDLPlayer::unInitAudio()
 		fclose(m_fileWav);
 		m_fileWav = NULL;
 	}
+
+	// Reset audio quality tracking
+	m_audioUnderrunCount = 0;
+	m_audioDroppedFrames = 0;
+	m_audioFadeOut = false;
+	m_audioFadeOutSamples = 0;
+
+	// Clean up audio resampler
+	if (!m_resampleBuffer) {
+		free(m_resampleBuffer);
+		m_resampleBuffer = NULL;
+		m_resampleBufferSize = 0;
+	}
+	m_needsResampling = false;
+	m_resamplePos = 0.0;
+	m_streamSampleRate = 0;
+	// Note: m_systemSampleRate is intentionally NOT reset - it's cached for the session
 }
 
 void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
@@ -1702,33 +1713,92 @@ void CSDLPlayer::sdlAudioCallback(void* userdata, Uint8* stream, int len)
 	CSDLPlayer* pThis = (CSDLPlayer*)userdata;
 	int needLen = len;
 	int streamPos = 0;
+
+	// Initialize output buffer to silence
 	memset(stream, 0, len);
 
-	// Get current volume (volatile read is atomic for int)
-	int volume = pThis->m_audioVolume;
+	// Update normalized device volume for UI display
+	pThis->m_deviceVolumeNormalized = (float)pThis->m_audioVolume / (float)SDL_MIX_MAXVOLUME;
 
 	CAutoLock oLock(pThis->m_mutexAudio, "sdlAudioCallback");
-	while (!pThis->m_queueAudio.empty())
+
+	// Check for underrun condition
+	if (pThis->m_queueAudio.empty()) {
+		pThis->m_audioUnderrunCount++;
+		// Signal fade-out for next time we get data (prevents pop when resuming)
+		pThis->m_audioFadeOut = true;
+		pThis->m_audioFadeOutSamples = 256;  // ~5ms fade at 48kHz stereo
+		// Decay peak level when no audio
+		pThis->m_peakLevel *= 0.95f;
+		return;  // Output silence
+	}
+
+	// Track peak level for this buffer
+	float bufferPeak = 0.0f;
+
+	// Process audio frames from queue
+	while (!pThis->m_queueAudio.empty() && needLen > 0)
 	{
 		SAudioFrame* pAudioFrame = pThis->m_queueAudio.front();
 		int pos = pAudioFrame->dataTotal - pAudioFrame->dataLeft;
-		int readLen = min(pAudioFrame->dataLeft, needLen);
+		int readLen = min((int)pAudioFrame->dataLeft, needLen);
 
-		// Apply volume using SDL_MixAudio (mixes src into dst with volume control)
-		// Volume range: 0 = mute, 128 = full volume (SDL_MIX_MAXVOLUME)
-		SDL_MixAudio(stream + streamPos, pAudioFrame->data + pos, readLen, volume);
+		// Get source and destination pointers
+		Sint16* src = (Sint16*)(pAudioFrame->data + pos);
+		Sint16* dst = (Sint16*)(stream + streamPos);
+		int numSamples = readLen / 2;  // 16-bit samples
+
+		// Simple volume scaling using integer math (avoids float conversion crackling)
+		int volume = pThis->m_audioVolume;
+		for (int i = 0; i < numSamples; i++) {
+			// Track peak level from INPUT signal (before volume scaling)
+			int absSrc = (src[i] < 0) ? -src[i] : src[i];
+			float level = absSrc / 32768.0f;
+			if (level > bufferPeak) {
+				bufferPeak = level;
+			}
+
+			// Scale by device volume
+			int sample = ((int)src[i] * volume) / SDL_MIX_MAXVOLUME;
+
+			// Apply fade-in if recovering from underrun
+			if (pThis->m_audioFadeOut && pThis->m_audioFadeOutSamples > 0) {
+				int fadeProgress = 256 - pThis->m_audioFadeOutSamples;
+				sample = (sample * fadeProgress) / 256;
+				pThis->m_audioFadeOutSamples--;
+				if (pThis->m_audioFadeOutSamples <= 0) {
+					pThis->m_audioFadeOut = false;
+				}
+			}
+
+			// Clamp to 16-bit range
+			if (sample > 32767) sample = 32767;
+			else if (sample < -32768) sample = -32768;
+
+			dst[i] = (Sint16)sample;
+		}
 
 		pAudioFrame->dataLeft -= readLen;
 		needLen -= readLen;
 		streamPos += readLen;
+
 		if (pAudioFrame->dataLeft <= 0) {
 			pThis->m_queueAudio.pop();
 			delete[] pAudioFrame->data;
 			delete pAudioFrame;
 		}
-		if (needLen <= 0) {
-			break;
-		}
+	}
+
+	// Update peak level for UI display (with smoothing)
+	if (bufferPeak > pThis->m_peakLevel) {
+		pThis->m_peakLevel = bufferPeak;  // Fast attack
+	} else {
+		pThis->m_peakLevel = pThis->m_peakLevel * 0.95f + bufferPeak * 0.05f;  // Slow decay
+	}
+
+	// If we still need data but queue is empty, we had a partial underrun
+	if (needLen > 0) {
+		pThis->m_audioUnderrunCount++;
 	}
 }
 
@@ -1771,8 +1841,6 @@ void CSDLPlayer::setVolume(float dbVolume)
 	}
 
 	m_audioVolume = sdlVolume;
-	printf("[VOLUME] AirPlay: %.1f dB -> SDL: %d/%d (%.0f%%)\n",
-		dbVolume, sdlVolume, SDL_MIX_MAXVOLUME, (sdlVolume * 100.0f) / SDL_MIX_MAXVOLUME);
 }
 
 void CSDLPlayer::showWindow()
@@ -1833,7 +1901,6 @@ void CSDLPlayer::requestToggleFullscreen()
 
 void CSDLPlayer::requestResize(int width, int height)
 {
-	printf("[RESIZE-DEBUG] requestResize: storing pending %dx%d\n", width, height);
 	// Store pending resize dimensions - will be handled in main loop
 	// Don't set m_bResizing here - let handleLiveResize do it when it actually runs
 	m_pendingResizeWidth = width;
@@ -1937,17 +2004,9 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	}
 
 	// Only log when actually reinitializing
-	printf("[RESIZE-DEBUG] initScaler: ENTER src=%dx%d dst=%dx%d (reinit needed)\n", srcW, srcH, dstW, dstH);
-	printf("[RESIZE-DEBUG] initScaler: current state - m_swsCtx=%p, scaledSize=%dx%d, srcSize=%dx%d, forceReinit=%d\n",
-		m_swsCtx, m_scaledWidth, m_scaledHeight, m_srcWidth, m_srcHeight, forceReinit);
-	fflush(stdout);
 
 	// Free existing scaler
-	printf("[RESIZE-DEBUG] initScaler: calling freeScaler()\n");
-	fflush(stdout);
 	freeScaler();
-	printf("[RESIZE-DEBUG] initScaler: freeScaler() done\n");
-	fflush(stdout);
 
 	// Determine scaling algorithm based on quality preset
 	int scalingAlgorithm;
@@ -1966,18 +2025,12 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	}
 
 	// Create new scaler with selected algorithm
-	printf("[RESIZE-DEBUG] initScaler: creating sws context\n");
-	fflush(stdout);
 	m_swsCtx = sws_getContext(srcW, srcH, AV_PIX_FMT_YUV420P,
 		dstW, dstH, AV_PIX_FMT_YUV420P,
 		scalingAlgorithm,
 		NULL, NULL, NULL);
-	printf("[RESIZE-DEBUG] initScaler: sws_getContext returned %p\n", m_swsCtx);
-	fflush(stdout);
 
 	if (m_swsCtx == NULL) {
-		printf("[RESIZE-DEBUG] initScaler: EXIT (sws_getContext failed)\n");
-		fflush(stdout);
 		return;
 	}
 
@@ -1995,23 +2048,15 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	m_scaledPitch[0] = ((dstW + 31) >> 5) << 5;        // Y pitch (32-byte aligned for AVX)
 	m_scaledPitch[1] = ((uvWidth + 31) >> 5) << 5;     // U pitch (32-byte aligned)
 	m_scaledPitch[2] = m_scaledPitch[1];               // V pitch
-	printf("[RESIZE-DEBUG] initScaler: pitches = {%d, %d, %d}, uvDim=%dx%d\n",
-		m_scaledPitch[0], m_scaledPitch[1], m_scaledPitch[2], uvWidth, uvHeight);
-	fflush(stdout);
 
 	int ySize = m_scaledPitch[0] * dstH;
 	int uvSize = m_scaledPitch[1] * uvHeight;  // Use ceiling-divided height for UV planes
-	printf("[RESIZE-DEBUG] initScaler: allocating buffers ySize=%d uvSize=%d\n", ySize, uvSize);
-	fflush(stdout);
 
 	// Allocate both buffers for double-buffering
 	for (int i = 0; i < 2; i++) {
 		m_scaledYUV[i][0] = (uint8_t*)_aligned_malloc(ySize, 32);
 		m_scaledYUV[i][1] = (uint8_t*)_aligned_malloc(uvSize, 32);
 		m_scaledYUV[i][2] = (uint8_t*)_aligned_malloc(uvSize, 32);
-		printf("[RESIZE-DEBUG] initScaler: buffer[%d] = {%p, %p, %p}\n",
-			i, m_scaledYUV[i][0], m_scaledYUV[i][1], m_scaledYUV[i][2]);
-		fflush(stdout);
 
 		// Initialize to black (Y=0, U=128, V=128)
 		if (m_scaledYUV[i][0]) memset(m_scaledYUV[i][0], 0, ySize);
@@ -2024,8 +2069,6 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	m_readBuffer = 0;
 	m_bufferReady = 0;
 	m_bScalerNeedsReinit = 0;
-	printf("[RESIZE-DEBUG] initScaler: EXIT (success)\n");
-	fflush(stdout);
 }
 
 // Free pending scaler resources - now just clears the pending pointers (actual free is in freeScaler)
@@ -2033,13 +2076,9 @@ void CSDLPlayer::freePendingScalerResources()
 {
 	// Free any pending context
 	if (m_pendingFreeCtx != NULL) {
-		printf("[RESIZE-DEBUG] freePendingScalerResources: freeing pending sws context %p\n", m_pendingFreeCtx);
-		fflush(stdout);
 		SwsContext* ctx = m_pendingFreeCtx;
 		m_pendingFreeCtx = NULL;
 		sws_freeContext(ctx);
-		printf("[RESIZE-DEBUG] freePendingScalerResources: pending sws context freed\n");
-		fflush(stdout);
 	}
 
 	// Free any pending buffers
@@ -2061,9 +2100,6 @@ void CSDLPlayer::freePendingScalerResources()
 
 void CSDLPlayer::freeScaler()
 {
-	printf("[RESIZE-DEBUG] freeScaler: ENTER m_swsCtx=%p, scaledSize=%dx%d\n",
-		m_swsCtx, m_scaledWidth, m_scaledHeight);
-	fflush(stdout);
 
 	// SAFETY: Clear dimensions FIRST to prevent any other thread from thinking the scaler is valid
 	int oldWidth = m_scaledWidth;
@@ -2075,14 +2111,9 @@ void CSDLPlayer::freeScaler()
 
 	// Move context to pending (will be freed by callback thread)
 	if (m_swsCtx != NULL) {
-		printf("[RESIZE-DEBUG] freeScaler: deferring sws context free (was %dx%d), ctx=%p\n",
-			oldWidth, oldHeight, m_swsCtx);
-		fflush(stdout);
 
 		// If there's already a pending context, accept the leak (safer than crash)
 		if (m_pendingFreeCtx != NULL) {
-			printf("[RESIZE-DEBUG] freeScaler: WARNING - leaking pending ctx %p\n", m_pendingFreeCtx);
-			fflush(stdout);
 		}
 		m_pendingFreeCtx = m_swsCtx;
 		m_swsCtx = NULL;
@@ -2107,6 +2138,4 @@ void CSDLPlayer::freeScaler()
 	m_scaledPitch[0] = 0;
 	m_scaledPitch[1] = 0;
 	m_scaledPitch[2] = 0;
-	printf("[RESIZE-DEBUG] freeScaler: EXIT (deferred)\n");
-	fflush(stdout);
 }

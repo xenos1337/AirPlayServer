@@ -104,6 +104,33 @@ public:
 	HANDLE m_mutexVideo;
 	volatile int m_audioVolume;  // SDL volume (0-128, where 128 = SDL_MIX_MAXVOLUME)
 
+	// Audio quality improvements
+	static const int AUDIO_BUFFER_SAMPLES = 1024;   // ~21ms at 48kHz (balanced latency/quality)
+	static const int AUDIO_QUEUE_MAX_FRAMES = 20;   // Max frames before dropping (~400ms buffer)
+	static const int AUDIO_QUEUE_START_THRESHOLD = 3;  // Frames needed before starting playback
+	int m_audioUnderrunCount;                       // Track underruns for diagnostics
+	int m_audioDroppedFrames;                       // Track dropped frames for diagnostics
+	bool m_audioFadeOut;                            // Fade out on underrun to prevent pops
+	int m_audioFadeOutSamples;                      // Remaining samples in fade-out
+
+	// Audio resampling (for matching system device sample rate)
+	DWORD m_systemSampleRate;                       // System audio device sample rate
+	DWORD m_streamSampleRate;                       // Incoming stream sample rate
+	uint8_t* m_resampleBuffer;                      // Buffer for resampled audio
+	int m_resampleBufferSize;                       // Size of resample buffer
+	double m_resamplePos;                           // Fractional position for linear interpolation
+	bool m_needsResampling;                         // Flag indicating resampling is needed
+
+	// Dynamic limiter (normalize loud sounds)
+	float m_limiterGain;                            // Current limiter gain (0.0 to 1.0)
+	float m_peakLevel;                              // Peak level for UI display (0.0 to 1.0)
+	float m_deviceVolumeNormalized;                 // Device volume normalized to 0.0-1.0 for UI
+	bool m_autoAdjustEnabled;                       // Normalize feature enabled
+	static constexpr float LIMITER_THRESHOLD = 0.5f;   // Start limiting above 50% level (more aggressive)
+	static constexpr float LIMITER_RATIO = 0.6f;       // Output level when limiting (60% = quieter)
+	static constexpr float LIMITER_ATTACK = 0.002f;    // Fast attack (2ms)
+	static constexpr float LIMITER_RELEASE = 0.100f;   // Slower release (100ms) for smoother sound
+
 	SDL_Event m_evtVideoSizeChange;
 
 	bool m_bDumpAudio;
