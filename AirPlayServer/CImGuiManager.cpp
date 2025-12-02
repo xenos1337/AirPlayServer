@@ -17,6 +17,9 @@ CImGuiManager::CImGuiManager()
 	, m_qualityPreset(QUALITY_BALANCED)  // Default to balanced (60fps, normal quality)
 	, m_bNeedSyncTabs(false)
 	, m_bLastWasOverlay(false)
+	, m_deviceVolume(0.5f)     // Default 50% (will be updated by device)
+	, m_bAutoAdjust(false)     // Auto-adjust off by default
+	, m_currentAudioLevel(0.0f)
 {
 	memset(m_deviceNameBuffer, 0, sizeof(m_deviceNameBuffer));
 }
@@ -390,7 +393,8 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 
 void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName,
 	int videoWidth, int videoHeight, float fps, float bitrateMbps,
-	unsigned long long totalFrames, unsigned long long droppedFrames)
+	unsigned long long totalFrames, unsigned long long droppedFrames,
+	unsigned long long totalBytes)
 {
 	if (!m_bInitialized) {
 		return;
@@ -464,11 +468,6 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 			float aspectRatio = (float)videoWidth / (float)videoHeight;
 			ImGui::Text("Aspect Ratio: %.2f:1", aspectRatio);
 			
-			// Calculate total data received
-			unsigned long long totalMB = totalFrames > 0 ? (unsigned long long)(bitrateMbps * 1000.0f * 1000.0f / 8.0f * (totalFrames / (fps > 0 ? fps : 30.0f)) / (1024 * 1024)) : 0;
-			if (totalMB > 0) {
-				ImGui::Text("Data Received: ~%llu MB", totalMB);
-			}
 		}
 	} else {
 		ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Waiting...");
@@ -501,6 +500,63 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 			ImGui::EndTabItem();
 		}
 		ImGui::EndTabBar();
+	}
+
+	ImGui::Separator();
+
+	// Audio Controls Section
+	ImGui::Text("Audio:");
+
+	// Device volume display (read-only - controlled by the streaming device)
+	int volumePercent = (int)(m_deviceVolume * 100.0f);
+	ImGui::Text("Device Volume: %d%%", volumePercent);
+
+	// Volume bar visualization
+	{
+		float barWidth = 100.0f;
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+		// Background
+		drawList->AddRectFilled(pos, ImVec2(pos.x + barWidth, pos.y + 8),
+			IM_COL32(40, 40, 40, 255));
+
+		// Volume level (blue)
+		drawList->AddRectFilled(pos, ImVec2(pos.x + barWidth * m_deviceVolume, pos.y + 8),
+			IM_COL32(80, 140, 200, 255));
+
+		// Border
+		drawList->AddRect(pos, ImVec2(pos.x + barWidth, pos.y + 8),
+			IM_COL32(100, 100, 100, 255));
+
+		ImGui::Dummy(ImVec2(barWidth, 10));
+	}
+
+	// Audio level meter
+	ImGui::Text("Level:");
+	ImGui::SameLine();
+	{
+		float barWidth = 80.0f;
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+		drawList->AddRectFilled(pos, ImVec2(pos.x + barWidth, pos.y + 10),
+			IM_COL32(40, 40, 40, 255));
+
+		float level = m_currentAudioLevel;
+		ImU32 levelColor;
+		if (level < 0.5f) {
+			levelColor = IM_COL32(80, 200, 80, 255);
+		} else if (level < 0.75f) {
+			levelColor = IM_COL32(200, 200, 80, 255);
+		} else {
+			levelColor = IM_COL32(200, 80, 80, 255);
+		}
+		drawList->AddRectFilled(pos, ImVec2(pos.x + barWidth * level, pos.y + 10), levelColor);
+		drawList->AddRect(pos, ImVec2(pos.x + barWidth, pos.y + 10),
+			IM_COL32(100, 100, 100, 255));
+
+		ImGui::Dummy(ImVec2(barWidth, 10));
 	}
 
 	ImGui::Separator();

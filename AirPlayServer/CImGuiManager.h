@@ -28,7 +28,8 @@ public:
 	void RenderHomeScreen(const char* deviceName, bool isConnected, const char* connectedDeviceName);
 	void RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName,
 		int videoWidth = 0, int videoHeight = 0, float fps = 0.0f, float bitrateMbps = 0.0f,
-		unsigned long long totalFrames = 0, unsigned long long droppedFrames = 0);
+		unsigned long long totalFrames = 0, unsigned long long droppedFrames = 0,
+		unsigned long long totalBytes = 0);
 
 	// Input handling
 	bool WantCaptureMouse() const { return ImGui::GetIO().WantCaptureMouse; }
@@ -39,6 +40,11 @@ public:
 
 	// Get quality preset
 	EQualityPreset GetQualityPreset() const { return m_qualityPreset; }
+
+	// Audio controls
+	bool IsAutoAdjustEnabled() const { return m_bAutoAdjust; }
+	void SetDeviceVolume(float volume) { m_deviceVolume = volume; }  // From AirPlay device (0.0-1.0)
+	void SetCurrentAudioLevel(float level) { m_currentAudioLevel = level; }  // For UI display
 
 	// Check if UI was just hidden (need to clear surface)
 	bool WasUIJustHidden() {
@@ -63,6 +69,11 @@ private:
 	EQualityPreset m_qualityPreset;
 	bool m_bNeedSyncTabs;  // Flag to sync tab selection once when switching views
 	bool m_bLastWasOverlay;  // Track if last rendered was overlay (true) or home (false)
+
+	// Audio controls
+	float m_deviceVolume;        // Volume from AirPlay device (0.0 to 1.0)
+	bool m_bAutoAdjust;          // Auto-adjust (normalize loud sounds) enabled
+	float m_currentAudioLevel;   // Current audio level for meter display (0.0 to 1.0)
 
 	void SetupStyle();
 	void RenderDrawData(ImDrawData* drawData, SDL_Surface* surface);
