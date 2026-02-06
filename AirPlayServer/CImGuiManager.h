@@ -25,7 +25,8 @@ public:
 	void ProcessEvent(SDL_Event* event);
 
 	// UI rendering
-	void RenderHomeScreen(const char* deviceName, bool isConnected, const char* connectedDeviceName);
+	void RenderHomeScreen(const char* deviceName, bool isConnected, const char* connectedDeviceName, bool isServerRunning = true);
+	void RenderDisconnectMessage(const char* deviceName);
 	void RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName,
 		int videoWidth = 0, int videoHeight = 0, float fps = 0.0f, float bitrateMbps = 0.0f,
 		unsigned long long totalFrames = 0, unsigned long long droppedFrames = 0,
@@ -45,6 +46,10 @@ public:
 	bool IsAutoAdjustEnabled() const { return m_bAutoAdjust; }
 	void SetDeviceVolume(float volume) { m_deviceVolume = volume; }  // From AirPlay device (0.0-1.0)
 	void SetCurrentAudioLevel(float level) { m_currentAudioLevel = level; }  // For UI display
+
+	// Settings persistence
+	void LoadSettings(const char* iniPath);
+	void SaveSettings(const char* iniPath);
 
 	// Check if UI was just hidden (need to clear surface)
 	bool WasUIJustHidden() {
@@ -74,6 +79,9 @@ private:
 	float m_deviceVolume;        // Volume from AirPlay device (0.0 to 1.0)
 	bool m_bAutoAdjust;          // Auto-adjust (normalize loud sounds) enabled
 	float m_currentAudioLevel;   // Current audio level for meter display (0.0 to 1.0)
+
+	// DPI scaling
+	float m_dpiScale;            // System DPI scale factor (1.0 = 96dpi, 1.25 = 120dpi, etc.)
 
 	void SetupStyle();
 	void RenderDrawData(ImDrawData* drawData, SDL_Surface* surface);

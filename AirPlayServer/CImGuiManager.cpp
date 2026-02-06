@@ -20,6 +20,7 @@ CImGuiManager::CImGuiManager()
 	, m_deviceVolume(0.5f)     // Default 50% (will be updated by device)
 	, m_bAutoAdjust(false)     // Auto-adjust off by default
 	, m_currentAudioLevel(0.0f)
+	, m_dpiScale(1.0f)
 {
 	memset(m_deviceNameBuffer, 0, sizeof(m_deviceNameBuffer));
 }
@@ -47,22 +48,22 @@ bool CImGuiManager::Init(SDL_Surface* surface)
 	// Configure font atlas for better quality
 	io.Fonts->TexGlyphPadding = 1;  // Padding between glyphs for crisp rendering
 	
+	// Query system DPI for scaling UI elements and fonts
+	{
+		HDC hdc = GetDC(NULL);
+		int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+		ReleaseDC(NULL, hdc);
+		m_dpiScale = (float)dpi / 96.0f;
+		if (m_dpiScale < 1.0f) m_dpiScale = 1.0f;
+	}
+
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
 	SetupStyle();
-	
-	// Setup Platform/Renderer backends
-	// For SDL 1.2, we'll use Win32 for input and a custom renderer
-	// Get the window handle from SDL
-	SDL_SysWMinfo wmInfo;
-	SDL_VERSION(&wmInfo.version);
-	if (SDL_GetWMInfo(&wmInfo) == 1) {
-		HWND hwnd = wmInfo.window;
-		
-		// Initialize Win32 backend for input
-		// We'll handle this manually in ProcessEvent
-	}
-	
+
+	// Scale all style sizes by DPI factor (padding, rounding, scrollbar, etc.)
+	ImGui::GetStyle().ScaleAllSizes(m_dpiScale);
+
 	// Initialize font and build font atlas
 	// Try to load fonts in order: Segoe UI Variable -> Segoe UI -> Arial -> Default
 	ImFont* font = NULL;
@@ -72,26 +73,26 @@ bool CImGuiManager::Init(SDL_Surface* surface)
 		"C:\\Windows\\Fonts\\segoeui.ttf",        // Segoe UI
 		"C:\\Windows\\Fonts\\arial.ttf"          // Arial
 	};
-	
+
+	float fontSize = 16.0f * m_dpiScale;  // Scale font to match system DPI
+
 	// Try each font path - check file existence first to avoid unnecessary errors
 	for (int i = 0; i < 4 && font == NULL; i++) {
 		// Check if file exists before trying to load (Windows-specific check)
 		DWORD fileAttributes = GetFileAttributesA(fontPaths[i]);
 		if (fileAttributes != INVALID_FILE_ATTRIBUTES && !(fileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-			// Create a fresh font config with default constructor, then set flags
 			ImFontConfig fontConfig;
 			fontConfig.Flags = ImFontFlags_NoLoadError;
-			// High quality font rendering with proper oversampling
-			fontConfig.OversampleH = 3;  // 3x horizontal oversampling for sharp edges
-			fontConfig.OversampleV = 2;  // 2x vertical oversampling
-			fontConfig.PixelSnapH = false;  // Disable snap to allow sub-pixel positioning with oversampling
+			// High quality font rendering with oversampling
+			fontConfig.OversampleH = 3;
+			fontConfig.OversampleV = 2;
+			fontConfig.PixelSnapH = false;
 			fontConfig.PixelSnapV = false;
-			fontConfig.RasterizerMultiply = 1.0f;  // Normal brightness
-			fontConfig.GlyphOffset.x = 0.0f;  // No horizontal offset
-			fontConfig.GlyphOffset.y = 0.0f;  // No vertical offset
+			fontConfig.RasterizerMultiply = 1.0f;
+			fontConfig.GlyphOffset.x = 0.0f;
+			fontConfig.GlyphOffset.y = 0.0f;
 
-			// Compact font size
-			font = io.Fonts->AddFontFromFileTTF(fontPaths[i], 16.0f, &fontConfig, NULL);
+			font = io.Fonts->AddFontFromFileTTF(fontPaths[i], fontSize, &fontConfig, NULL);
 		}
 	}
 	
@@ -237,7 +238,7 @@ void CImGuiManager::ProcessEvent(SDL_Event* event)
 	}
 }
 
-void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, const char* connectedDeviceName)
+void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, const char* connectedDeviceName, bool isServerRunning)
 {
 	if (!m_bInitialized) {
 		return;
@@ -355,6 +356,15 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	ImGui::Separator();
 	ImGui::Dummy(ImVec2(0, 4.0f));
 
+	// Network status indicator
+	const char* svcText = isServerRunning ? "[Services Active]" : "[Not Running]";
+	ImVec4 svcColor = isServerRunning ? ImVec4(0.2f, 0.8f, 0.3f, 1.0f) : ImVec4(0.9f, 0.3f, 0.3f, 1.0f);
+	float svcWidth = ImGui::CalcTextSize(svcText).x;
+	ImGui::SetCursorPosX((windowWidth - svcWidth) * 0.5f - padding);
+	ImGui::TextColored(svcColor, "%s", svcText);
+
+	ImGui::Dummy(ImVec2(0, 4.0f));
+
 	// Connection status - centered
 	const char* statusText = isConnected ? "Connected" : "Waiting for connection...";
 	ImVec4 statusColor = isConnected ? ImVec4(0.2f, 0.9f, 0.3f, 1.0f) : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
@@ -386,6 +396,14 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	float inst2Width = ImGui::CalcTextSize(instruction2).x;
 	ImGui::SetCursorPosX((windowWidth - inst2Width) * 0.5f - padding);
 	ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", instruction2);
+
+	ImGui::Dummy(ImVec2(0, 8.0f));
+
+	// Keyboard shortcuts reference
+	const char* shortcuts = "H: Toggle UI | F: Fullscreen | Esc: Exit Fullscreen";
+	float shortcutsWidth = ImGui::CalcTextSize(shortcuts).x;
+	ImGui::SetCursorPosX((windowWidth - shortcutsWidth) * 0.5f - padding);
+	ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "%s", shortcuts);
 
 	ImGui::End();
 	ImGui::PopStyleVar(3);
@@ -560,7 +578,7 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 	}
 
 	ImGui::Separator();
-	ImGui::Text("Press H to hide UI");
+	ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "H: Toggle UI | F: Fullscreen | Esc: Exit FS");
 
 	ImGui::End();
 }
@@ -578,10 +596,14 @@ static inline void BlendPixel(Uint32* dst, Uint8 r, Uint8 g, Uint8 b, Uint8 a, S
 	Uint8 dr, dg, db;
 	SDL_GetRGB(*dst, fmt, &dr, &dg, &db);
 	
-	// Alpha blend
-	Uint8 nr = (Uint8)((r * a + dr * (255 - a)) / 255);
-	Uint8 ng = (Uint8)((g * a + dg * (255 - a)) / 255);
-	Uint8 nb = (Uint8)((b * a + db * (255 - a)) / 255);
+	// Alpha blend using exact-equivalent shift trick (avoids slow division by 255)
+	// Formula: ((x + 128 + (x >> 8)) >> 8) == x / 255 for all x in [0, 65025]
+	unsigned int tr = r * a + dr * (255 - a);
+	unsigned int tg = g * a + dg * (255 - a);
+	unsigned int tb = b * a + db * (255 - a);
+	Uint8 nr = (Uint8)((tr + 128 + (tr >> 8)) >> 8);
+	Uint8 ng = (Uint8)((tg + 128 + (tg >> 8)) >> 8);
+	Uint8 nb = (Uint8)((tb + 128 + (tb >> 8)) >> 8);
 	
 	*dst = SDL_MapRGB(fmt, nr, ng, nb);
 }
@@ -767,8 +789,9 @@ void CImGuiManager::Render(SDL_Surface* surface)
 								float texAlpha = a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) +
 								                 a01 * (1 - fx) * fy + a11 * fx * fy;
 
-								// Multiply alpha by texture alpha
-								finalA = (Uint8)((finalA * (int)texAlpha) / 255);
+								// Multiply alpha by texture alpha (shift trick avoids division)
+								unsigned int ta = finalA * (unsigned int)texAlpha;
+								finalA = (Uint8)((ta + 128 + (ta >> 8)) >> 8);
 							}
 							
 							if (finalA > 0) {
@@ -980,8 +1003,71 @@ void CImGuiManager::SetupStyle()
 	colors[ImGuiCol_UnsavedMarker]          = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
 }
 
+void CImGuiManager::RenderDisconnectMessage(const char* deviceName)
+{
+	if (!m_bInitialized) {
+		return;
+	}
+
+	ImGui::SetCurrentContext(m_pContext);
+
+	// Centered semi-transparent window showing disconnect message
+	ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowBgAlpha(0.75f);
+
+	ImGui::Begin("##Disconnect", NULL,
+		ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
+		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs);
+
+	ImGui::Dummy(ImVec2(0, 8.0f));
+	ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "  Disconnected  ");
+	if (deviceName && strlen(deviceName) > 0) {
+		ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "  %s  ", deviceName);
+	}
+	ImGui::Dummy(ImVec2(0, 8.0f));
+
+	ImGui::End();
+}
+
 const char* CImGuiManager::GetDeviceName() const
 {
 	return m_deviceNameBuffer[0] ? m_deviceNameBuffer : NULL;
+}
+
+void CImGuiManager::LoadSettings(const char* iniPath)
+{
+	// Load device name
+	char buf[256] = { 0 };
+	GetPrivateProfileStringA("General", "DeviceName", "", buf, sizeof(buf), iniPath);
+	if (strlen(buf) > 0) {
+		strncpy_s(m_deviceNameBuffer, sizeof(m_deviceNameBuffer), buf, _TRUNCATE);
+	}
+
+	// Load quality preset
+	int preset = GetPrivateProfileIntA("General", "QualityPreset", 1, iniPath);
+	if (preset >= QUALITY_GOOD && preset <= QUALITY_FAST) {
+		m_qualityPreset = (EQualityPreset)preset;
+	}
+
+	// Load auto-adjust
+	int autoAdj = GetPrivateProfileIntA("Audio", "AutoAdjust", 0, iniPath);
+	m_bAutoAdjust = (autoAdj != 0);
+}
+
+void CImGuiManager::SaveSettings(const char* iniPath)
+{
+	// Save device name
+	WritePrivateProfileStringA("General", "DeviceName",
+		m_deviceNameBuffer[0] ? m_deviceNameBuffer : "", iniPath);
+
+	// Save quality preset
+	char buf[16];
+	sprintf_s(buf, sizeof(buf), "%d", (int)m_qualityPreset);
+	WritePrivateProfileStringA("General", "QualityPreset", buf, iniPath);
+
+	// Save auto-adjust
+	WritePrivateProfileStringA("Audio", "AutoAdjust", m_bAutoAdjust ? "1" : "0", iniPath);
 }
 
