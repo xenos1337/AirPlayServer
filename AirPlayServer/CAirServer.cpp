@@ -34,9 +34,11 @@ bool getHostName(char hostName[512])
 			if (n > 2)
 			{
 				hostName[n] = '\0';
+				return true;
 			}
 		}
 	}
+	return false;
 }
 
 void CAirServer::start(CSDLPlayer* pPlayer, const char* serverName)

@@ -13,6 +13,7 @@ public:
 public:
 	void start(CSDLPlayer* pPlayer, const char* serverName = NULL);
 	void stop();
+	bool isRunning() const { return m_pServer != NULL; }
 	float setVideoScale(float fRatio);
 
 private:
