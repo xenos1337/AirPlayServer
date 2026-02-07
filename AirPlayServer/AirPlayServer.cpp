@@ -33,9 +33,31 @@ void AtExitHandler()
     CleanupAndShutdown();
 }
 
-int main(int argc, char* argv[])
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    (void)hInstance; (void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+
+    // Enable per-monitor DPI awareness for sharp rendering on high-DPI displays
+    // Use runtime loading since these APIs require Windows 10 1703+
+    {
+        HMODULE hUser32 = GetModuleHandle(TEXT("user32.dll"));
+        if (hUser32) {
+            // Try Per-Monitor V2 first (best quality, Windows 10 1703+)
+            typedef BOOL(WINAPI* SetDpiAwarenessContextFn)(HANDLE);
+            SetDpiAwarenessContextFn fnCtx = (SetDpiAwarenessContextFn)
+                GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
+            if (fnCtx) {
+                fnCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            } else {
+                // Fallback: basic DPI awareness (Vista+)
+                typedef BOOL(WINAPI* SetProcessDPIAwareFn)();
+                SetProcessDPIAwareFn fnDpi = (SetProcessDPIAwareFn)
+                    GetProcAddress(hUser32, "SetProcessDPIAware");
+                if (fnDpi) fnDpi();
+            }
+        }
+    }
 
     // Register atexit handler as fallback
     atexit(AtExitHandler);

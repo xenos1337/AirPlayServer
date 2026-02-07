@@ -214,5 +214,12 @@ public:
 	void initScaler(int srcW, int srcH, int dstW, int dstH);
 	void freeScaler();
 	void freePendingScalerResources();  // Free deferred scaler resources (called from callback thread)
+
+	// YUV->RGB converter (legacy, no longer used - scaling thread outputs BGRA directly)
+	SwsContext* m_rgbConvertCtx;       // sws context (unused)
+	int m_rgbConvertWidth;             // Current converter input width
+	int m_rgbConvertHeight;            // Current converter input height
+	void initRGBConverter(int w, int h);
+	void freeRGBConverter();
 };
 

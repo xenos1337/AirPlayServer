@@ -232,6 +232,11 @@ CSDLPlayer::CSDLPlayer()
 	m_scalingThread = NULL;
 	m_scalingEvent = NULL;
 	m_scalingThreadRunning = 0;
+
+	// RGB converter members (no longer used - scaling thread outputs BGRA directly)
+	m_rgbConvertCtx = NULL;
+	m_rgbConvertWidth = 0;
+	m_rgbConvertHeight = 0;
 }
 
 CSDLPlayer::~CSDLPlayer()
@@ -239,6 +244,21 @@ CSDLPlayer::~CSDLPlayer()
 	// Restore original window procedure before cleanup
 	if (m_hwnd != NULL && m_originalWndProc != NULL) {
 		SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)m_originalWndProc);
+	}
+
+	// Stop scaling thread before freeing resources
+	if (m_scalingThread != NULL) {
+		InterlockedExchange(&m_scalingThreadRunning, 0);
+		if (m_scalingEvent != NULL) {
+			SetEvent(m_scalingEvent);  // Wake thread so it can exit
+		}
+		WaitForSingleObject(m_scalingThread, 2000);
+		CloseHandle(m_scalingThread);
+		m_scalingThread = NULL;
+	}
+	if (m_scalingEvent != NULL) {
+		CloseHandle(m_scalingEvent);
+		m_scalingEvent = NULL;
 	}
 
 	freeScaler();
@@ -284,7 +304,10 @@ bool CSDLPlayer::init()
 		// Enable double-click detection by adding CS_DBLCLKS to window class
 		LONG_PTR classStyle = GetClassLongPtr(m_hwnd, GCL_STYLE);
 		SetClassLongPtr(m_hwnd, GCL_STYLE, classStyle | CS_DBLCLKS);
-		
+
+		// Disable SDL 1.2's custom cursor - we handle cursor via WM_SETCURSOR in WindowProc
+		SDL_ShowCursor(SDL_DISABLE);
+
 		// Subclass the window for live resize updates and double-click fullscreen
 		m_originalWndProc = (WNDPROC)SetWindowLongPtr(m_hwnd, GWLP_WNDPROC, (LONG_PTR)WindowProc);
 	}
@@ -294,6 +317,31 @@ bool CSDLPlayer::init()
 		printf("Failed to initialize ImGui\n");
 		// Continue anyway
 	}
+
+	// Load persisted settings
+	{
+		char settingsPath[MAX_PATH] = { 0 };
+		GetModuleFileNameA(NULL, settingsPath, MAX_PATH);
+		// Replace exe filename with ini filename
+		char* lastSlash = strrchr(settingsPath, '\\');
+		if (lastSlash) {
+			strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash + 1 - settingsPath), "airplay_settings.ini");
+		} else {
+			strcpy_s(settingsPath, MAX_PATH, "airplay_settings.ini");
+		}
+		m_imgui.LoadSettings(settingsPath);
+
+		// Override server name if saved device name exists
+		const char* savedName = m_imgui.GetDeviceName();
+		if (savedName != NULL && strlen(savedName) > 0) {
+			setServerName(savedName);
+		}
+	}
+
+	// Start background scaling thread
+	m_scalingEvent = CreateEvent(NULL, FALSE, FALSE, NULL);  // auto-reset event
+	m_scalingThreadRunning = 1;
+	m_scalingThread = CreateThread(NULL, 0, ScalingThreadProc, this, 0, NULL);
 
 	// Start with window visible to show home screen
 	showWindow();
@@ -391,8 +439,9 @@ void CSDLPlayer::loopEvents()
 			if (event.type == SDL_MOUSEMOTION) {
 				m_lastMouseMoveTime = GetTickCount();
 				if (m_bCursorHidden) {
-					SDL_ShowCursor(SDL_ENABLE);
 					m_bCursorHidden = false;
+					// Force WM_SETCURSOR to fire and show the arrow cursor
+					SetCursor(LoadCursor(NULL, IDC_ARROW));
 				}
 			}
 
@@ -461,6 +510,7 @@ void CSDLPlayer::loopEvents()
 								m_surface->format->Rmask, m_surface->format->Gmask,
 								m_surface->format->Bmask, m_surface->format->Amask);
 							if (m_videoBuffer != NULL) {
+								SDL_SetAlpha(m_videoBuffer, 0, 0);  // Disable alpha blending for direct blit
 								SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 							}
 						}
@@ -545,6 +595,20 @@ void CSDLPlayer::loopEvents()
 
 		case SDL_QUIT: {
 			printf("Quit requested, quitting.\n");
+
+			// Save settings before shutdown
+			{
+				char settingsPath[MAX_PATH] = { 0 };
+				GetModuleFileNameA(NULL, settingsPath, MAX_PATH);
+				char* lastSlash = strrchr(settingsPath, '\\');
+				if (lastSlash) {
+					strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash + 1 - settingsPath), "airplay_settings.ini");
+				} else {
+					strcpy_s(settingsPath, MAX_PATH, "airplay_settings.ini");
+				}
+				m_imgui.SaveSettings(settingsPath);
+			}
+
 			// Stop server first before exiting the event loop
 			// This ensures clean shutdown and prevents callbacks during destruction
 			m_server.stop();
@@ -573,38 +637,59 @@ void CSDLPlayer::loopEvents()
 			}
 		}
 		
-		// MAIN THREAD: Hardware-accelerated YUV rendering with ImGui overlay
-		// Step 1: Display YUV overlay (minimize mutex hold time)
-		{
-			CAutoLock videoLock(m_mutexVideo, "renderLoop");
+		// MAIN THREAD: Consume BGRA frames from scaling thread, blit to surface
+		// Step 1: When scaling thread produces a new frame, copy BGRA to m_videoBuffer
+		// m_videoBuffer is a persistent off-screen surface that holds the last displayed frame
+		if (InterlockedCompareExchange(&m_bufferReady, 0, 1) == 1) {
+			LONG readIdx = InterlockedCompareExchange(&m_readBuffer, 0, 0);
+			if (readIdx >= 0 && readIdx <= 1 &&
+				m_scaledYUV[readIdx][0] != NULL &&
+				m_scaledWidth > 0 && m_scaledHeight > 0 &&
+				m_videoBuffer != NULL) {
 
-			if (m_hasNewFrame && m_yuv != NULL && m_surface != NULL) {
-				// Hardware-accelerated YUV->RGB conversion and scaling
-				// Only log periodically during normal operation
-				static int renderLogCounter = 0;
-				renderLogCounter++;
-				if (renderLogCounter % 60 == 0) {
+				// Copy BGRA from double buffer to m_videoBuffer at displayRect position
+				// m_videoBuffer persists between frames (survives SDL_Flip's buffer swap)
+
+				// Clear entire video buffer to black (for letterbox areas)
+				SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
+
+				// Lock for direct pixel access, then copy BGRA rows
+				if (SDL_MUSTLOCK(m_videoBuffer)) SDL_LockSurface(m_videoBuffer);
+
+				int bpp = m_videoBuffer->format->BytesPerPixel;
+				uint8_t* dstBase = (uint8_t*)m_videoBuffer->pixels
+					+ m_displayRect.y * m_videoBuffer->pitch
+					+ m_displayRect.x * bpp;
+				const uint8_t* srcBase = m_scaledYUV[readIdx][0];
+				int copyBytes = m_scaledWidth * bpp;
+
+				for (int row = 0; row < m_scaledHeight; row++) {
+					memcpy(dstBase, srcBase, copyBytes);
+					dstBase += m_videoBuffer->pitch;
+					srcBase += m_scaledPitch[0];
 				}
-				SDL_DisplayYUVOverlay(m_yuv, &m_displayRect);
-				m_hasNewFrame = false; // Mark frame as rendered immediately
+
+				if (SDL_MUSTLOCK(m_videoBuffer)) SDL_UnlockSurface(m_videoBuffer);
+				m_hasNewFrame = true;
 				m_lastFrameTime = GetTickCount();
-			} else if (m_yuv != NULL && m_surface != NULL && m_videoWidth > 0) {
-				// No new frame, but redisplay existing YUV overlay
-				SDL_DisplayYUVOverlay(m_yuv, &m_displayRect);
-			} else if (m_surface != NULL) {
-				// No video yet - fill with black
+			}
+		}
+
+		// Step 2: Blit m_videoBuffer to m_surface (fast, no YUV conversion, no SDL_UpdateRects)
+		// This is flicker-free because only SDL_Flip updates the screen
+		if (m_surface != NULL) {
+			if (m_videoBuffer != NULL && m_videoWidth > 0) {
+				// Blit the persistent video buffer onto the screen's back buffer
+				SDL_BlitSurface(m_videoBuffer, NULL, m_surface, NULL);
+			} else {
+				// No video - fill with black
 				SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
 			}
 		}
-		// Mutex released - outputVideo can now write next frame while we do ImGui
 
-		// Step 2: Render ImGui on top of m_surface (outside mutex for less contention)
+		// Step 3: Render ImGui on top of m_surface
 		if (m_surface != NULL) {
-			// Check if UI was just hidden - need to clear surface to remove old UI
-			if (m_imgui.WasUIJustHidden()) {
-				// Clear the entire surface to black to remove old UI content
-				SDL_FillRect(m_surface, NULL, SDL_MapRGB(m_surface->format, 0, 0, 0));
-			}
+			m_imgui.WasUIJustHidden();  // Consume the flag to keep state clean
 
 			m_imgui.NewFrame(m_surface);
 			if (m_bConnected) {
@@ -613,15 +698,16 @@ void CSDLPlayer::loopEvents()
 					m_videoWidth, m_videoHeight, m_currentFPS, m_currentBitrateMbps,
 					m_totalFrames, m_droppedFrames, m_totalBytes);
 			} else if (m_bDisconnecting) {
-				// Disconnecting - render nothing (show black screen)
+				// Disconnecting - show disconnect message instead of blank screen
+				m_imgui.RenderDisconnectMessage(m_connectedDeviceName);
 			} else {
 				// Disconnected - show home screen
-				m_imgui.RenderHomeScreen(m_serverName, m_bConnected, m_connectedDeviceName);
+				m_imgui.RenderHomeScreen(m_serverName, m_bConnected, m_connectedDeviceName, m_server.isRunning());
 			}
 			// ImGui renders with alpha blending on top of the video layer
 			m_imgui.Render(m_surface);
 
-			// Step 3: Flip to display everything
+			// Step 4: Flip to display everything (ONLY screen update per frame)
 			SDL_Flip(m_surface);
 		}
 		
@@ -629,8 +715,9 @@ void CSDLPlayer::loopEvents()
 		if (!m_bCursorHidden && m_lastMouseMoveTime > 0) {
 			DWORD elapsed = GetTickCount() - m_lastMouseMoveTime;
 			if (elapsed >= CURSOR_HIDE_DELAY_MS) {
-				SDL_ShowCursor(SDL_DISABLE);
 				m_bCursorHidden = true;
+				// Force WM_SETCURSOR to fire and hide the cursor
+				SetCursor(NULL);
 			}
 		}
 
@@ -712,17 +799,26 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		return;
 	}
 
-	// CALLBACK THREAD: Write YUV data to hardware overlay
-	// Use short mutex lock - only for overlay write, not for scaling
+	// CALLBACK THREAD: Copy YUV source to staging buffer, signal scaling thread
+	// The scaling thread converts YUV->BGRA in the background
+
+	// Diagnostic: log first few frames and every 100th to confirm arrival
+	static int dbgFrameCount = 0;
+	dbgFrameCount++;
+	if (dbgFrameCount <= 3 || dbgFrameCount % 100 == 0) {
+		char dbg[256];
+		sprintf_s(dbg, "outputVideo: frame #%d, %ux%u, displayRect=%dx%d, bResizing=%d\n",
+			dbgFrameCount, data->width, data->height,
+			m_displayRect.w, m_displayRect.h, (int)m_bResizing);
+		OutputDebugStringA(dbg);
+	}
 
 	// Get source YUV plane pointers
 	const uint8_t* srcY = data->data;
 	const uint8_t* srcU = data->data + data->dataLen[0];
 	const uint8_t* srcV = data->data + data->dataLen[0] + data->dataLen[1];
 
-	// SCALING/COPY PATH - all under mutex to prevent race with resize
-	static int frameCounter = 0;
-	frameCounter++;
+	// SCALING/COPY PATH - under mutex to prevent race with resize
 	{
 		CAutoLock oLock(m_mutexVideo, "outputVideo");
 
@@ -738,220 +834,71 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		int dstW = m_displayRect.w;
 		int dstH = m_displayRect.h;
 
-		// ===== YUV420 ALIGNMENT FIX =====
-		// YUV420 subsamples chroma (U/V) by 2 in both dimensions.
-		// If width or height is ODD, the UV plane math becomes:
-		//   529 / 2 = 264.5 → truncated to 264
-		// This causes a 1-byte drift per row, creating diagonal color artifacts.
-		// FIX: Force dimensions to be EVEN numbers using bitwise AND with ~1
-		int originalDstW = dstW;
-		int originalDstH = dstH;
-		dstW = dstW & ~1;  // Round down to nearest even (e.g., 529 -> 528)
-		dstH = dstH & ~1;  // Round down to nearest even (e.g., 1153 -> 1152)
+		// No even-dimension constraint needed: output is BGRA (packed RGB), not YUV420P.
+		// The input YUV420P source dimensions are handled by sws_scale internally.
 
-		// Check if we need to scale (display size differs from video size)
-		bool needsScaling = (dstW != (int)data->width || dstH != (int)data->height);
-
-		if (needsScaling && dstW > 0 && dstH > 0) {
-			// SCALING PATH
-			// Initialize/reinit scaler if needed
+		// UNIFIED PATH: All frames go through the scaling thread
+		// The scaling thread handles both rescaling AND colorspace conversion (YUV->BGRA)
+		// Even for 1:1 mode, this converts YUV to BGRA for flicker-free surface blit
+		if (dstW > 0 && dstH > 0) {
 			initScaler(data->width, data->height, dstW, dstH);
 
-			// Get write buffer for scaling
-			LONG writeIdx = InterlockedCompareExchange(&m_writeBuffer, 0, 0);
-			if (writeIdx < 0 || writeIdx > 1) writeIdx = 0;  // Safety check
-
-			// Verify all buffers are valid before scaling
-
 			if (m_swsCtx != NULL &&
-				m_scaledYUV[writeIdx][0] != NULL &&
-				m_scaledYUV[writeIdx][1] != NULL &&
-				m_scaledYUV[writeIdx][2] != NULL &&
+				m_srcYUV[0] != NULL && m_srcYUV[1] != NULL && m_srcYUV[2] != NULL &&
 				srcY != NULL && srcU != NULL && srcV != NULL &&
 				data->pitch[0] > 0 && data->pitch[1] > 0 && data->pitch[2] > 0 &&
 				m_scaledWidth == dstW && m_scaledHeight == dstH) {
 
-				// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
-				if (m_hasNewFrame) {
+				// Drop frame if scaling thread hasn't consumed the previous one
+				if (InterlockedCompareExchange(&m_srcReady, 0, 0) != 0) {
 					m_droppedFrames++;
 				} else {
-					// Scale directly from source to our buffer
-					const uint8_t* srcSlice[3] = { srcY, srcU, srcV };
-					int srcStride[3] = { (int)data->pitch[0], (int)data->pitch[1], (int)data->pitch[2] };
-					sws_scale(m_swsCtx, srcSlice, srcStride, 0, data->height,
-						m_scaledYUV[writeIdx], m_scaledPitch);
-
-					// Copy to overlay - verify overlay dimensions match
-					if (m_yuv != NULL && m_yuv->w == dstW && m_yuv->h == dstH &&
-						SDL_LockYUVOverlay(m_yuv) == 0) {
-
-						// =============================================================
-						// ROW-BY-ROW YUV COPY WITH PITCH HANDLING
-						// =============================================================
-						//
-						// PROBLEM: FFmpeg aligns buffers to 32-byte boundaries for SIMD.
-						//          SDL overlays may have different (often tighter) pitches.
-						//          If we ignore the pitch difference, diagonal shear occurs.
-						//
-						// SOLUTION: Copy each row separately, using:
-						//   - Source pitch to advance the READ pointer (skip FFmpeg padding)
-						//   - Dest pitch to advance the WRITE pointer
-						//   - Copy only the valid pixel bytes (not the padding)
-						//
-						// MEMORY LAYOUT EXAMPLE (width=207, srcPitch=224, dstPitch=207):
-						//
-						//   FFmpeg Buffer (srcPitch=224):
-						//   Row 0: [207 valid bytes][17 padding]  <- offset 0
-						//   Row 1: [207 valid bytes][17 padding]  <- offset 224
-						//   Row 2: [207 valid bytes][17 padding]  <- offset 448
-						//
-						//   SDL Overlay (dstPitch=207):
-						//   Row 0: [207 bytes]  <- offset 0
-						//   Row 1: [207 bytes]  <- offset 207
-						//   Row 2: [207 bytes]  <- offset 414
-						// =============================================================
-
-						// =============================================================
-						// BULLETPROOF ROW-BY-ROW YUV COPY
-						// Uses explicit pointer increments - NO index multiplication!
-						// =============================================================
-
-						// Get dimensions
-						const int yHeight = dstH;
-						const int uvHeight = (dstH + 1) / 2;
-
-						// Get pitches (stride) - THE KEY VALUES
-						const int srcPitchY = m_scaledPitch[0];   // FFmpeg Y pitch (aligned, e.g., 352)
-						const int srcPitchUV = m_scaledPitch[1];  // FFmpeg UV pitch (aligned)
-						const int dstPitchY = m_yuv->pitches[0];  // SDL Y pitch (e.g., 331)
-						const int dstPitchUV = m_yuv->pitches[1]; // SDL UV pitch
-
-						// Bytes to copy per row = min(visual_width, dst_pitch)
-						const int yBytesToCopy = (dstW < dstPitchY) ? dstW : dstPitchY;
-						const int uvLogicalWidth = (dstW + 1) / 2;
-						const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
-
-
-						// ===== Y PLANE: Explicit pointer-increment copy =====
-						{
-							const uint8_t* srcPtr = m_scaledYUV[writeIdx][0];
-							uint8_t* dstPtr = m_yuv->pixels[0];
-
-							for (int row = 0; row < yHeight; row++) {
-								memcpy(dstPtr, srcPtr, yBytesToCopy);
-
-								// EXPLICIT INCREMENT: Advance pointers by their respective pitches
-								srcPtr += srcPitchY;   // Skip padding in source (e.g., +352)
-								dstPtr += dstPitchY;   // Advance in destination (e.g., +331)
-							}
-						}
-
-						// ===== U PLANE: Explicit pointer-increment copy =====
-						{
-							const uint8_t* srcPtr = m_scaledYUV[writeIdx][1];
-							uint8_t* dstPtr = m_yuv->pixels[1];
-
-							for (int row = 0; row < uvHeight; row++) {
-								memcpy(dstPtr, srcPtr, uvBytesToCopy);
-								srcPtr += srcPitchUV;
-								dstPtr += dstPitchUV;
-							}
-						}
-
-						// ===== V PLANE: Explicit pointer-increment copy =====
-						{
-							const uint8_t* srcPtr = m_scaledYUV[writeIdx][2];
-							uint8_t* dstPtr = m_yuv->pixels[2];
-
-							for (int row = 0; row < uvHeight; row++) {
-								memcpy(dstPtr, srcPtr, uvBytesToCopy);
-								srcPtr += srcPitchUV;
-								dstPtr += dstPitchUV;
-							}
-						}
-
-						SDL_UnlockYUVOverlay(m_yuv);
-						m_lastFramePTS = data->pts;
-						m_hasNewFrame = true;
-
-						// Swap write buffer for next frame
-						InterlockedExchange(&m_writeBuffer, 1 - writeIdx);
-					}
-				}
-			} else {
-			}
-		} else if (dstW > 0 && dstH > 0) {
-			// DIRECT PATH: 1:1 pixel mapping - direct copy without scaling
-			// This path is taken when display size matches video size exactly
-
-			// FRAME DROPPING: If previous frame hasn't been displayed, drop this new frame
-			if (m_hasNewFrame) {
-				m_droppedFrames++;
-			} else if (m_yuv != NULL &&
-				m_yuv->w == (int)data->width && m_yuv->h == (int)data->height &&
-				SDL_LockYUVOverlay(m_yuv) == 0) {
-
-				// =============================================================
-				// BULLETPROOF ROW-BY-ROW YUV COPY (DIRECT PATH)
-				// Uses explicit pointer increments - NO index multiplication!
-				// =============================================================
-
-				// Get dimensions
+				// Fast memcpy of source planes into staging buffer (~1ms)
 				const int yHeight = data->height;
 				const int uvHeight = (data->height + 1) / 2;
+				const int yBytesToCopy = (int)data->width < m_srcPitch[0] ? (int)data->width : m_srcPitch[0];
+				const int uvLogicalWidth = ((int)data->width + 1) / 2;
+				const int uvBytesToCopy = uvLogicalWidth < m_srcPitch[1] ? uvLogicalWidth : m_srcPitch[1];
 
-				// Get pitches (stride) - THE KEY VALUES
-				const int srcPitchY = data->pitch[0];    // Input Y pitch (from FFmpeg)
-				const int srcPitchUV = data->pitch[1];   // Input UV pitch
-				const int dstPitchY = m_yuv->pitches[0]; // SDL Y pitch
-				const int dstPitchUV = m_yuv->pitches[1]; // SDL UV pitch
-
-				// Bytes to copy per row = min(visual_width, dst_pitch)
-				const int visualWidth = data->width;
-				const int yBytesToCopy = (visualWidth < dstPitchY) ? visualWidth : dstPitchY;
-				const int uvLogicalWidth = (visualWidth + 1) / 2;
-				const int uvBytesToCopy = (uvLogicalWidth < dstPitchUV) ? uvLogicalWidth : dstPitchUV;
-
-
-				// ===== Y PLANE: Explicit pointer-increment copy =====
+				// Y plane copy
 				{
-					const uint8_t* srcPtr = srcY;
-					uint8_t* dstPtr = m_yuv->pixels[0];
-
+					const uint8_t* sp = srcY;
+					uint8_t* dp = m_srcYUV[0];
 					for (int row = 0; row < yHeight; row++) {
-						memcpy(dstPtr, srcPtr, yBytesToCopy);
-						srcPtr += srcPitchY;   // SKIP PADDING
-						dstPtr += dstPitchY;
+						memcpy(dp, sp, yBytesToCopy);
+						sp += data->pitch[0];
+						dp += m_srcPitch[0];
 					}
 				}
-
-				// ===== U PLANE: Explicit pointer-increment copy =====
+				// U plane copy
 				{
-					const uint8_t* srcPtr = srcU;
-					uint8_t* dstPtr = m_yuv->pixels[1];
-
+					const uint8_t* sp = srcU;
+					uint8_t* dp = m_srcYUV[1];
 					for (int row = 0; row < uvHeight; row++) {
-						memcpy(dstPtr, srcPtr, uvBytesToCopy);
-						srcPtr += srcPitchUV;
-						dstPtr += dstPitchUV;
+						memcpy(dp, sp, uvBytesToCopy);
+						sp += data->pitch[1];
+						dp += m_srcPitch[1];
 					}
 				}
-
-				// ===== V PLANE: Explicit pointer-increment copy =====
+				// V plane copy
 				{
-					const uint8_t* srcPtr = srcV;
-					uint8_t* dstPtr = m_yuv->pixels[2];
-
+					const uint8_t* sp = srcV;
+					uint8_t* dp = m_srcYUV[2];
 					for (int row = 0; row < uvHeight; row++) {
-						memcpy(dstPtr, srcPtr, uvBytesToCopy);
-						srcPtr += srcPitchUV;
-						dstPtr += dstPitchUV;
+						memcpy(dp, sp, uvBytesToCopy);
+						sp += data->pitch[2];
+						dp += m_srcPitch[2];
 					}
 				}
 
-				SDL_UnlockYUVOverlay(m_yuv);
 				m_lastFramePTS = data->pts;
-				m_hasNewFrame = true;
+
+				// Signal scaling thread to process this frame
+				InterlockedExchange(&m_srcReady, 1);
+				if (m_scalingEvent != NULL) {
+					SetEvent(m_scalingEvent);
+				}
+				} // end of else (frame not dropped)
 			}
 		}
 	} // End of mutex scope
@@ -1135,6 +1082,7 @@ void CSDLPlayer::resizeWindow(int width, int height)
 			m_surface->format->Rmask, m_surface->format->Gmask,
 			m_surface->format->Bmask, m_surface->format->Amask);
 		if (m_videoBuffer != NULL) {
+			SDL_SetAlpha(m_videoBuffer, 0, 0);  // Disable alpha blending for direct blit
 			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 		}
 	}
@@ -1230,6 +1178,7 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 		m_surface->format->Rmask, m_surface->format->Gmask,
 		m_surface->format->Bmask, m_surface->format->Amask);
 	if (m_videoBuffer != NULL) {
+		SDL_SetAlpha(m_videoBuffer, 0, 0);  // Disable alpha blending for direct blit
 		SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 	}
 
@@ -1308,6 +1257,18 @@ LRESULT CALLBACK CSDLPlayer::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 			// Double-click toggles fullscreen (post event to handle asynchronously)
 			s_instance->requestToggleFullscreen();
 			return 0;
+		}
+		case WM_SETCURSOR: {
+			// Override SDL 1.2's cursor handling - it sets an invisible cursor when SDL_ShowCursor is disabled
+			if (LOWORD(lParam) == HTCLIENT) {
+				if (s_instance->m_bCursorHidden) {
+					SetCursor(NULL);  // Hide cursor in client area
+				} else {
+					SetCursor(LoadCursor(NULL, IDC_ARROW));  // Standard Windows arrow
+				}
+				return TRUE;  // Prevent SDL from overriding our cursor
+			}
+			break;
 		}
 	}
 
@@ -1393,6 +1354,7 @@ void CSDLPlayer::toggleFullscreen()
 			m_surface->format->Rmask, m_surface->format->Gmask,
 			m_surface->format->Bmask, m_surface->format->Amask);
 		if (m_videoBuffer != NULL) {
+			SDL_SetAlpha(m_videoBuffer, 0, 0);  // Disable alpha blending for direct blit
 			SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 		}
 
@@ -1451,9 +1413,38 @@ void CSDLPlayer::toggleFullscreen()
 		int height = m_windowedRect.bottom - m_windowedRect.top;
 		if (width <= 0) width = 800;
 		if (height <= 0) height = 600;
+		int posX = m_windowedRect.left;
+		int posY = m_windowedRect.top;
+
+		// Clamp restored window to 80% of screen (high-res sources can exceed screen size)
+		HMONITOR hMon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+		if (hMon != NULL) {
+			MONITORINFO mi;
+			mi.cbSize = sizeof(MONITORINFO);
+			if (GetMonitorInfo(hMon, &mi)) {
+				int workW = mi.rcWork.right - mi.rcWork.left;
+				int workH = mi.rcWork.bottom - mi.rcWork.top;
+				int maxW = (int)(workW * 0.80f);
+				int maxH = (int)(workH * 0.80f);
+				if (width > maxW || height > maxH) {
+					float aspect = (float)width / (float)height;
+					float maxAspect = (float)maxW / (float)maxH;
+					if (aspect > maxAspect) {
+						width = maxW;
+						height = (int)(maxW / aspect);
+					} else {
+						height = maxH;
+						width = (int)(maxH * aspect);
+					}
+				}
+				// Center on screen
+				posX = mi.rcWork.left + (workW - width) / 2;
+				posY = mi.rcWork.top + (workH - height) / 2;
+			}
+		}
 
 		SetWindowPos(m_hwnd, HWND_NOTOPMOST,
-			m_windowedRect.left, m_windowedRect.top, width, height,
+			posX, posY, width, height,
 			SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 
 		// Resize SDL surface back
@@ -1478,6 +1469,7 @@ void CSDLPlayer::toggleFullscreen()
 				m_surface->format->Rmask, m_surface->format->Gmask,
 				m_surface->format->Bmask, m_surface->format->Amask);
 			if (m_videoBuffer != NULL) {
+				SDL_SetAlpha(m_videoBuffer, 0, 0);  // Disable alpha blending for direct blit
 				SDL_FillRect(m_videoBuffer, NULL, SDL_MapRGB(m_videoBuffer->format, 0, 0, 0));
 			}
 		}
@@ -1528,7 +1520,7 @@ void CSDLPlayer::toggleFullscreen()
 void CSDLPlayer::calculateDisplayRect()
 {
 	if (m_videoWidth <= 0 || m_videoHeight <= 0) {
-		// No video yet, center a placeholder rect
+		// No video yet, fill the entire window
 		m_displayRect.x = 0;
 		m_displayRect.y = 0;
 		m_displayRect.w = m_windowWidth;
@@ -1536,30 +1528,36 @@ void CSDLPlayer::calculateDisplayRect()
 		return;
 	}
 
-	// Check for exact 1:1 pixel mapping (no scaling needed)
-	if (m_windowWidth == m_videoWidth && m_windowHeight == m_videoHeight) {
-		// Perfect 1:1 mapping - no interpolation blur
+	// Use cross-multiplication to compare aspect ratios without float rounding:
+	// videoAspect > windowAspect  iff  videoW * windowH > windowW * videoH
+	long long videoCross = (long long)m_videoWidth * m_windowHeight;
+	long long windowCross = (long long)m_windowWidth * m_videoHeight;
+
+	// If the aspect ratios are very close (within 1%), just fill the entire window.
+	// This avoids thin black bars from integer rounding when the window was sized to match the video.
+	long long diff = videoCross - windowCross;
+	if (diff < 0) diff = -diff;
+	long long threshold = windowCross / 100;  // 1% tolerance
+	if (diff <= threshold) {
 		m_displayRect.x = 0;
 		m_displayRect.y = 0;
-		m_displayRect.w = m_videoWidth;
-		m_displayRect.h = m_videoHeight;
+		m_displayRect.w = m_windowWidth;
+		m_displayRect.h = m_windowHeight;
 		return;
 	}
 
-	// Calculate aspect ratios
-	float videoAspect = (float)m_videoWidth / (float)m_videoHeight;
-	float windowAspect = (float)m_windowWidth / (float)m_windowHeight;
-
 	int displayWidth, displayHeight;
 
-	if (videoAspect > windowAspect) {
+	if (videoCross > windowCross) {
 		// Video is wider than window - fit to width (letterbox top/bottom)
 		displayWidth = m_windowWidth;
-		displayHeight = (int)(m_windowWidth / videoAspect);
+		// Round to nearest: (windowW * videoH + videoW/2) / videoW
+		displayHeight = (int)(((long long)m_windowWidth * m_videoHeight + m_videoWidth / 2) / m_videoWidth);
 	} else {
 		// Video is taller than window - fit to height (pillarbox left/right)
 		displayHeight = m_windowHeight;
-		displayWidth = (int)(m_windowHeight * videoAspect);
+		// Round to nearest: (windowH * videoW + videoH/2) / videoH
+		displayWidth = (int)(((long long)m_windowHeight * m_videoWidth + m_videoHeight / 2) / m_videoHeight);
 	}
 
 	// Center the display rect
@@ -1922,27 +1920,64 @@ void CSDLPlayer::resizeToVideoSize()
 		return;  // Already 1:1
 	}
 
-	// Resize window to match video exactly
-	resizeWindow(m_videoWidth, m_videoHeight);
+	// Determine target size: video resolution clamped to screen work area
+	int targetW = m_videoWidth;
+	int targetH = m_videoHeight;
 
-	// Also update the Windows window size
 	if (m_hwnd != NULL) {
-		// Calculate window size including borders
-		RECT rect = { 0, 0, m_videoWidth, m_videoHeight };
-		AdjustWindowRectEx(&rect, GetWindowLong(m_hwnd, GWL_STYLE), FALSE, GetWindowLong(m_hwnd, GWL_EXSTYLE));
-		int windowWidth = rect.right - rect.left;
-		int windowHeight = rect.bottom - rect.top;
-
-		// Center on screen
 		HMONITOR hMonitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
 		if (hMonitor != NULL) {
 			MONITORINFO mi;
 			mi.cbSize = sizeof(MONITORINFO);
 			if (GetMonitorInfo(hMonitor, &mi)) {
-				int screenWidth = mi.rcWork.right - mi.rcWork.left;
-				int screenHeight = mi.rcWork.bottom - mi.rcWork.top;
-				int x = mi.rcWork.left + (screenWidth - windowWidth) / 2;
-				int y = mi.rcWork.top + (screenHeight - windowHeight) / 2;
+				int workW = mi.rcWork.right - mi.rcWork.left;
+				int workH = mi.rcWork.bottom - mi.rcWork.top;
+
+				// Cap window to 80% of screen when video exceeds screen size
+				int maxW = workW * 4 / 5;  // 80% using integer math
+				int maxH = workH * 4 / 5;
+
+				if (targetW > maxW || targetH > maxH) {
+					// Use cross-multiplication to find constraining dimension
+					// videoW/videoH > maxW/maxH  iff  videoW*maxH > maxW*videoH
+					if ((long long)m_videoWidth * maxH > (long long)maxW * m_videoHeight) {
+						// Constrained by width
+						targetW = maxW;
+						targetH = (int)(((long long)maxW * m_videoHeight + m_videoWidth / 2) / m_videoWidth);
+					} else {
+						// Constrained by height
+						targetH = maxH;
+						targetW = (int)(((long long)maxH * m_videoWidth + m_videoHeight / 2) / m_videoHeight);
+					}
+				}
+			}
+		}
+	}
+
+	resizeWindow(targetW, targetH);
+
+	// Also update the Windows window size
+	if (m_hwnd != NULL) {
+		// Calculate window size including borders
+		RECT rect = { 0, 0, targetW, targetH };
+		AdjustWindowRectEx(&rect, GetWindowLong(m_hwnd, GWL_STYLE), FALSE, GetWindowLong(m_hwnd, GWL_EXSTYLE));
+		int windowWidth = rect.right - rect.left;
+		int windowHeight = rect.bottom - rect.top;
+
+		// Clamp total window size (including borders) to work area
+		HMONITOR hMonitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+		if (hMonitor != NULL) {
+			MONITORINFO mi;
+			mi.cbSize = sizeof(MONITORINFO);
+			if (GetMonitorInfo(hMonitor, &mi)) {
+				int workW = mi.rcWork.right - mi.rcWork.left;
+				int workH = mi.rcWork.bottom - mi.rcWork.top;
+				if (windowWidth > workW) windowWidth = workW;
+				if (windowHeight > workH) windowHeight = workH;
+
+				// Center on screen
+				int x = mi.rcWork.left + (workW - windowWidth) / 2;
+				int y = mi.rcWork.top + (workH - windowHeight) / 2;
 				SetWindowPos(m_hwnd, NULL, x, y, windowWidth, windowHeight, SWP_NOZORDER);
 			}
 		}
@@ -1967,24 +2002,31 @@ DWORD WINAPI CSDLPlayer::ScalingThreadProc(LPVOID param)
 			break;
 		}
 
-		// Process all pending frames in a tight loop (drain any backlog)
-		while (InterlockedCompareExchange(&pThis->m_srcReady, 0, 1) == 1) {
-			// We have source data to scale
+		// Process pending frame if source is ready (lockless producer-consumer)
+		// Protocol: callback thread only writes m_srcYUV when m_srcReady==0
+		//           scaling thread only reads m_srcYUV when m_srcReady==1
+		//           scaling thread clears m_srcReady after finishing the read
+		if (InterlockedCompareExchange(&pThis->m_srcReady, 1, 1) == 1) {
 			if (pThis->m_swsCtx != NULL && pThis->m_srcYUV[0] != NULL) {
 				// Get write buffer index
 				LONG writeIdx = InterlockedCompareExchange(&pThis->m_writeBuffer, 0, 0);
 
-				// Perform scaling into back buffer (outside any mutex)
-				const uint8_t* srcSlice[3] = { pThis->m_srcYUV[0], pThis->m_srcYUV[1], pThis->m_srcYUV[2] };
+				// Perform scaling+conversion outside any mutex (the expensive operation)
+				// YUV420P input -> BGRA output (scaling thread handles both rescaling and colorspace)
+				const uint8_t* srcSlice[4] = { pThis->m_srcYUV[0], pThis->m_srcYUV[1], pThis->m_srcYUV[2], NULL };
 				sws_scale(pThis->m_swsCtx, srcSlice, pThis->m_srcPitch, 0, pThis->m_srcHeight,
 					pThis->m_scaledYUV[writeIdx], pThis->m_scaledPitch);
 
+				// Clear source ready AFTER scaling is complete (allows callback to write next frame)
+				InterlockedExchange(&pThis->m_srcReady, 0);
+
 				// Swap buffers atomically: write buffer becomes read buffer
-				LONG newReadIdx = writeIdx;
-				LONG newWriteIdx = 1 - writeIdx;
-				InterlockedExchange(&pThis->m_readBuffer, newReadIdx);
-				InterlockedExchange(&pThis->m_writeBuffer, newWriteIdx);
+				InterlockedExchange(&pThis->m_readBuffer, writeIdx);
+				InterlockedExchange(&pThis->m_writeBuffer, 1 - writeIdx);
 				InterlockedExchange(&pThis->m_bufferReady, 1);
+			} else {
+				// Invalid state, clear the flag
+				InterlockedExchange(&pThis->m_srcReady, 0);
 			}
 		}
 	}
@@ -2009,29 +2051,55 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	freeScaler();
 
 	// Determine scaling algorithm based on quality preset
+	// SWS_ACCURATE_RND: precise rounding in color conversion (avoids banding)
+	// SWS_FULL_CHR_H_INT: full chroma horizontal interpolation (YUV420 subsamples chroma 2x,
+	//   this flag upsamples chroma to full resolution before RGB conversion for sharper color edges)
 	int scalingAlgorithm;
+	int qualityFlags = SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT;
 	EQualityPreset preset = m_imgui.GetQualityPreset();
 	switch (preset) {
 	case QUALITY_GOOD:
-		scalingAlgorithm = SWS_LANCZOS;  // Highest quality - Lanczos resampling
+		scalingAlgorithm = SWS_LANCZOS | qualityFlags;
 		break;
 	case QUALITY_BALANCED:
-		scalingAlgorithm = SWS_FAST_BILINEAR;  // Good balance - fast bilinear
+		scalingAlgorithm = SWS_BILINEAR | qualityFlags;
 		break;
 	case QUALITY_FAST:
 	default:
-		scalingAlgorithm = SWS_POINT;  // Fastest - nearest neighbor
+		scalingAlgorithm = SWS_FAST_BILINEAR;  // Skip quality flags for max speed
 		break;
 	}
 
-	// Create new scaler with selected algorithm
+	// Create new scaler: YUV420P input -> BGRA output (handles both scaling and colorspace)
+	// BGRA matches Windows SDL 1.2 surface format (Rmask=0x00FF0000 on little-endian)
 	m_swsCtx = sws_getContext(srcW, srcH, AV_PIX_FMT_YUV420P,
-		dstW, dstH, AV_PIX_FMT_YUV420P,
+		dstW, dstH, AV_PIX_FMT_BGRA,
 		scalingAlgorithm,
 		NULL, NULL, NULL);
 
 	if (m_swsCtx == NULL) {
+		OutputDebugStringA("initScaler: sws_getContext FAILED for YUV420P->BGRA\n");
 		return;
+	}
+
+	// Set colorspace for accurate color reproduction
+	// The FFmpeg H.264 decoder in this project outputs full-range YUV (Y:0-255, UV:0-255)
+	// srcRange=1: full range input (no Y expansion needed)
+	// dstRange=1: full range output (RGB 0-255)
+	// BT.709 for HD (>=720p), BT.601 for SD - matches H.264 color matrix
+	{
+		int srcRange, dstRange, brightness, contrast, saturation;
+		const int* inv_table;
+		const int* table;
+		sws_getColorspaceDetails(m_swsCtx, (int**)&inv_table, &srcRange,
+			(int**)&table, &dstRange, &brightness, &contrast, &saturation);
+
+		int colorspace = (srcH >= 720) ? SWS_CS_ITU709 : SWS_CS_ITU601;
+		inv_table = sws_getCoefficients(colorspace);
+		table = sws_getCoefficients(colorspace);
+
+		sws_setColorspaceDetails(m_swsCtx, inv_table, 1, table, 1,
+			brightness, contrast, saturation);
 	}
 
 	m_scaledWidth = dstW;
@@ -2039,30 +2107,36 @@ void CSDLPlayer::initScaler(int srcW, int srcH, int dstW, int dstH)
 	m_srcWidth = srcW;
 	m_srcHeight = srcH;
 
-	// Allocate scaled YUV buffers with proper alignment (double-buffered)
-	// YUV420 format: UV planes have half the width and height of Y plane
-	// Use ceiling division for odd dimensions: (n + 1) / 2
-	int uvWidth = (dstW + 1) / 2;
-	int uvHeight = (dstH + 1) / 2;
+	// Allocate BGRA output buffers (double-buffered, single plane per buffer)
+	// BGRA = 4 bytes per pixel, 32-byte aligned pitch for SIMD
+	m_scaledPitch[0] = ((dstW * 4 + 31) >> 5) << 5;  // BGRA pitch (32-byte aligned)
+	m_scaledPitch[1] = 0;
+	m_scaledPitch[2] = 0;
 
-	m_scaledPitch[0] = ((dstW + 31) >> 5) << 5;        // Y pitch (32-byte aligned for AVX)
-	m_scaledPitch[1] = ((uvWidth + 31) >> 5) << 5;     // U pitch (32-byte aligned)
-	m_scaledPitch[2] = m_scaledPitch[1];               // V pitch
+	int rgbSize = m_scaledPitch[0] * dstH;
 
-	int ySize = m_scaledPitch[0] * dstH;
-	int uvSize = m_scaledPitch[1] * uvHeight;  // Use ceiling-divided height for UV planes
-
-	// Allocate both buffers for double-buffering
 	for (int i = 0; i < 2; i++) {
-		m_scaledYUV[i][0] = (uint8_t*)_aligned_malloc(ySize, 32);
-		m_scaledYUV[i][1] = (uint8_t*)_aligned_malloc(uvSize, 32);
-		m_scaledYUV[i][2] = (uint8_t*)_aligned_malloc(uvSize, 32);
+		m_scaledYUV[i][0] = (uint8_t*)_aligned_malloc(rgbSize, 32);
+		m_scaledYUV[i][1] = NULL;  // Not used for BGRA
+		m_scaledYUV[i][2] = NULL;  // Not used for BGRA
 
-		// Initialize to black (Y=0, U=128, V=128)
-		if (m_scaledYUV[i][0]) memset(m_scaledYUV[i][0], 0, ySize);
-		if (m_scaledYUV[i][1]) memset(m_scaledYUV[i][1], 128, uvSize);
-		if (m_scaledYUV[i][2]) memset(m_scaledYUV[i][2], 128, uvSize);
+		if (m_scaledYUV[i][0]) memset(m_scaledYUV[i][0], 0, rgbSize);
 	}
+
+	// Allocate source staging buffer for scaling thread
+	int srcUVWidth = (srcW + 1) / 2;
+	int srcUVHeight = (srcH + 1) / 2;
+	m_srcPitch[0] = ((srcW + 31) >> 5) << 5;
+	m_srcPitch[1] = ((srcUVWidth + 31) >> 5) << 5;
+	m_srcPitch[2] = m_srcPitch[1];
+	m_srcYUV[0] = (uint8_t*)_aligned_malloc(m_srcPitch[0] * srcH, 32);
+	m_srcYUV[1] = (uint8_t*)_aligned_malloc(m_srcPitch[1] * srcUVHeight, 32);
+	m_srcYUV[2] = (uint8_t*)_aligned_malloc(m_srcPitch[2] * srcUVHeight, 32);
+
+	// Initialize source buffers to black
+	if (m_srcYUV[0]) memset(m_srcYUV[0], 0, m_srcPitch[0] * srcH);
+	if (m_srcYUV[1]) memset(m_srcYUV[1], 128, m_srcPitch[1] * srcUVHeight);
+	if (m_srcYUV[2]) memset(m_srcYUV[2], 128, m_srcPitch[2] * srcUVHeight);
 
 	// Initialize buffer indices
 	m_writeBuffer = 0;
@@ -2100,10 +2174,7 @@ void CSDLPlayer::freePendingScalerResources()
 
 void CSDLPlayer::freeScaler()
 {
-
 	// SAFETY: Clear dimensions FIRST to prevent any other thread from thinking the scaler is valid
-	int oldWidth = m_scaledWidth;
-	int oldHeight = m_scaledHeight;
 	m_scaledWidth = 0;
 	m_scaledHeight = 0;
 	m_srcWidth = 0;
@@ -2138,4 +2209,36 @@ void CSDLPlayer::freeScaler()
 	m_scaledPitch[0] = 0;
 	m_scaledPitch[1] = 0;
 	m_scaledPitch[2] = 0;
+
+	// Wait for scaling thread to finish processing before freeing source buffers
+	// The scaling thread clears m_srcReady when done reading m_srcYUV
+	if (m_scalingThread != NULL) {
+		int waitCount = 0;
+		while (InterlockedCompareExchange(&m_srcReady, 0, 0) != 0 && waitCount < 100) {
+			Sleep(1);
+			waitCount++;
+		}
+	}
+
+	// Free source staging buffers (safe now - scaling thread is done with them)
+	for (int i = 0; i < 3; i++) {
+		if (m_srcYUV[i] != NULL) {
+			_aligned_free(m_srcYUV[i]);
+			m_srcYUV[i] = NULL;
+		}
+		m_srcPitch[i] = 0;
+	}
+	m_srcReady = 0;
+}
+
+// initRGBConverter/freeRGBConverter are no longer used.
+// The scaling thread now outputs BGRA directly, eliminating the need for
+// a separate YUV->RGB converter in the render loop.
+void CSDLPlayer::initRGBConverter(int w, int h)
+{
+	(void)w; (void)h;
+}
+
+void CSDLPlayer::freeRGBConverter()
+{
 }
