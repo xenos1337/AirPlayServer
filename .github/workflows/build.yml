@@ -1,0 +1,44 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Create MSYS2 linker directory
+        run: mkdir -p "C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0"
+        shell: bash
+
+      - name: Build solution (Release|x64)
+        run: msbuild AirPlay.sln /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: Create release zip
+        run: |
+          cd x64/Release
+          7z a -tzip ../../AirPlay2-Win-x64.zip *.exe *.dll
+        shell: bash
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirPlay2-Win-x64
+          path: AirPlay2-Win-x64.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AirPlay2-Win-x64.zip
+          generate_release_notes: true
