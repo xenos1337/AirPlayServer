@@ -50,7 +50,7 @@ The following must be in the same directory as `AirPlayServer.exe` (copied by ai
 
 ### Entry Point
 
-`AirPlayServer/AirPlayServer.cpp` → `int main()` (console subsystem). Initializes CRT leak detection, Winsock, gets hostname, then calls `CSDLPlayer::init()` which starts the AirPlay server and enters the SDL event loop.
+`AirPlayServer/AirPlayServer.cpp` → `WinMain()` (Windows subsystem). Initializes CRT leak detection, Winsock, gets hostname, then calls `CSDLPlayer::init()` which starts the AirPlay server and enters the SDL event loop.
 
 ### Threading Model
 
@@ -63,9 +63,9 @@ The following must be in the same directory as `AirPlayServer.exe` (copied by ai
 
 ```
 Network → raop.c/airplay.c → FgAirplayChannel (FFmpeg H.264→YUV420P)
-       → CAirServerCallback → CSDLPlayer::outputVideo (mutex-protected copy to m_srcYUV)
-       → Scaling thread (m_srcYUV → m_scaledYUV double-buffer, lockless)
-       → Main thread blits scaled buffer → ImGui overlay → SDL_Flip
+       → CAirServerCallback → CSDLPlayer::outputVideo (mutex-protected memcpy to m_srcYUV)
+       → Scaling thread: sws_scale(YUV420P → BGRA) into m_scaledYUV double-buffer (lockless)
+       → Main thread: memcpy BGRA to m_videoBuffer → SDL_BlitSurface → ImGui overlay → SDL_Flip
 ```
 
 ### DLL Boundary (airplay2dll)
@@ -121,8 +121,11 @@ typedef struct SFgAudioFrame {
 - FFmpeg H.264 decoder: `AV_CODEC_FLAG_LOW_DELAY`, 4 threads (`FF_THREAD_SLICE`)
 - Decoder initializes on first keyframe (not stream start) for faster startup
 - YUV420 dimensions forced even via ceiling division to prevent chroma drift
+- Scaling thread outputs BGRA directly (YUV420P → BGRA in one sws_scale call)
 - Scaling algorithms per quality preset: `SWS_LANCZOS` / `SWS_FAST_BILINEAR` / `SWS_POINT`
 - Good Quality preset skips every other frame (30fps); Balanced/Fast render every frame (60fps)
+- All frames route through scaling thread (even 1:1 mode = pure colorspace conversion)
+- Render loop: memcpy BGRA → m_videoBuffer → SDL_BlitSurface → ImGui → SDL_Flip (flicker-free)
 
 ### ImGui Integration
 
@@ -137,10 +140,11 @@ Critical mutexes:
 - `m_mutexAudio`: Protects audio queue access
 
 Double-buffered scaling (lockless producer-consumer):
-- `m_scaledYUV[2][3]`: Two buffers, three YUV planes each
+- `m_scaledYUV[2][3]`: Two BGRA buffers (only [i][0] used; [i][1] and [i][2] are NULL)
 - `m_writeBuffer` / `m_readBuffer`: Atomic indices (0 or 1)
 - `m_bufferReady`: Atomic flag signaling new frame available
 - `m_scalingEvent`: Win32 event to wake scaling thread
+- `m_videoBuffer`: Persistent off-screen BGRA surface for flicker-free display
 
 ### Protocol & Crypto (AirPlayServerLib/lib/)
 
