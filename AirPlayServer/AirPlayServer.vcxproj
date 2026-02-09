@@ -90,16 +90,16 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_CRTDBG_MAP_ALLOC;WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;$(SolutionDir)external\ffmpeg\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL2\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>airplay2dll.lib;SDL.lib;swscale.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL2\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>airplay2dll.lib;SDL2.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y "$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget)\SDL.dll" $(OutDir)
+      <Command>xcopy /y "$(SolutionDir)external\SDL2\lib\$(PlatformTarget)\SDL2.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)\*.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</Command>
     </PostBuildEvent>
@@ -112,16 +112,16 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_CRTDBG_MAP_ALLOC;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;$(SolutionDir)external\ffmpeg\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL2\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>airplay2dll.lib;SDL.lib;swscale.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL2\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>airplay2dll.lib;SDL2.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y "$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget)\SDL.dll" $(OutDir)
+      <Command>xcopy /y "$(SolutionDir)external\SDL2\lib\$(PlatformTarget)\SDL2.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)\*.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</Command>
     </PostBuildEvent>
@@ -136,18 +136,18 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;$(SolutionDir)external\ffmpeg\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL2\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>airplay2dll.lib;SDL.lib;swscale.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL2\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>airplay2dll.lib;SDL2.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y "$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget)\SDL.dll" $(OutDir)
+      <Command>xcopy /y "$(SolutionDir)external\SDL2\lib\$(PlatformTarget)\SDL2.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)\*.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</Command>
     </PostBuildEvent>
@@ -162,18 +162,18 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL-1.2.15\include;$(SolutionDir)external\imgui;$(SolutionDir)external\ffmpeg\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)airplay2dll/include;$(SolutionDir)external\SDL2\include;$(SolutionDir)external\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget);$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>airplay2dll.lib;SDL.lib;swscale.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OutDir);$(SolutionDir)external\SDL2\lib\$(PlatformTarget)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>airplay2dll.lib;SDL2.lib;ws2_32.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y "$(SolutionDir)external\SDL-1.2.15\lib\$(PlatformTarget)\SDL.dll" $(OutDir)
+      <Command>xcopy /y "$(SolutionDir)external\SDL2\lib\$(PlatformTarget)\SDL2.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\ffmpeg\lib\$(PlatformTarget)\*.dll" $(OutDir)
 xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</Command>
     </PostBuildEvent>
@@ -190,6 +190,8 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
     <ClCompile Include="..\external\imgui\imgui_draw.cpp" />
     <ClCompile Include="..\external\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\external\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\external\imgui\imgui_impl_sdl2.cpp" />
+    <ClCompile Include="..\external\imgui\imgui_impl_sdlrenderer2.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CAirServer.h" />
