@@ -1,8 +1,9 @@
 #include "CImGuiManager.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdlrenderer2.h"
 #include "SDL.h"
-#include "SDL_syswm.h"
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,13 +12,14 @@
 CImGuiManager::CImGuiManager()
 	: m_bInitialized(false)
 	, m_pContext(NULL)
+	, m_pRenderer(NULL)
 	, m_bEditingDeviceName(false)
 	, m_bShowUI(true)
-	, m_bUIVisibilityChanged(false)
-	, m_qualityPreset(QUALITY_BALANCED)  // Default to balanced (60fps, normal quality)
+	, m_qualityPreset(QUALITY_BALANCED)  // Default to balanced (60fps, linear filtering)
 	, m_bNeedSyncTabs(false)
 	, m_bLastWasOverlay(false)
 	, m_deviceVolume(0.5f)     // Default 50% (will be updated by device)
+	, m_localVolume(1.0f)      // Default 100% local volume
 	, m_bAutoAdjust(false)     // Auto-adjust off by default
 	, m_currentAudioLevel(0.0f)
 	, m_dpiScale(1.0f)
@@ -30,24 +32,28 @@ CImGuiManager::~CImGuiManager()
 	Shutdown();
 }
 
-bool CImGuiManager::Init(SDL_Surface* surface)
+bool CImGuiManager::Init(SDL_Window* window, SDL_Renderer* renderer)
 {
 	if (m_bInitialized) {
 		return true;
+	}
+
+	if (!window || !renderer) {
+		return false;
 	}
 
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
 	m_pContext = ImGui::CreateContext();
 	ImGui::SetCurrentContext(m_pContext);
-	
+
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-	
+
 	// Configure font atlas for better quality
 	io.Fonts->TexGlyphPadding = 1;  // Padding between glyphs for crisp rendering
-	
+
 	// Query system DPI for scaling UI elements and fonts
 	{
 		HDC hdc = GetDC(NULL);
@@ -95,30 +101,28 @@ bool CImGuiManager::Init(SDL_Surface* surface)
 			font = io.Fonts->AddFontFromFileTTF(fontPaths[i], fontSize, &fontConfig, NULL);
 		}
 	}
-	
+
 	// If all custom fonts failed, use default ImGui font
 	if (font == NULL) {
 		font = io.Fonts->AddFontDefault();
 	}
-	
+
 	// Ensure we have a valid font (safety check)
 	if (font == NULL && io.Fonts->Fonts.Size > 0) {
 		font = io.Fonts->Fonts[0];
 	}
-	
+
 	// Set as default font if we have one
 	if (font != NULL) {
 		io.FontDefault = font;
 	}
-	
-	// Build font atlas texture
-	unsigned char* pixels;
-	int width, height;
-	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-	// We don't need to create a texture for software rendering
-	// Just mark the atlas as built
-	io.Fonts->SetTexID((ImTextureID)1);  // Dummy texture ID
-	
+
+	// Initialize SDL2 + SDL2Renderer ImGui backends
+	// These handle input, font atlas texture upload, and GPU-accelerated rendering
+	ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
+	ImGui_ImplSDLRenderer2_Init(renderer);
+
+	m_pRenderer = renderer;
 	m_bInitialized = true;
 	return true;
 }
@@ -128,40 +132,29 @@ void CImGuiManager::Shutdown()
 	if (!m_bInitialized) {
 		return;
 	}
-	
+
 	ImGui::SetCurrentContext(m_pContext);
+
+	// Shutdown ImGui backends
+	ImGui_ImplSDLRenderer2_Shutdown();
+	ImGui_ImplSDL2_Shutdown();
+
 	ImGui::DestroyContext(m_pContext);
 	m_pContext = NULL;
 	m_bInitialized = false;
 }
 
-void CImGuiManager::NewFrame(SDL_Surface* surface)
+void CImGuiManager::NewFrame()
 {
-	if (!m_bInitialized || !surface) {
+	if (!m_bInitialized) {
 		return;
 	}
-	
+
 	ImGui::SetCurrentContext(m_pContext);
-	ImGuiIO& io = ImGui::GetIO();
-	
-	// Setup display size
-	io.DisplaySize = ImVec2((float)surface->w, (float)surface->h);
-	io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
-	
-	// Setup time step - ensure DeltaTime is always positive
-	static DWORD g_LastTicks = 0;
-	DWORD currentTicks = SDL_GetTicks();
-	if (g_LastTicks == 0) {
-		g_LastTicks = currentTicks;
-	}
-	DWORD deltaTicks = currentTicks - g_LastTicks;
-	// Ensure minimum of 1ms to avoid zero DeltaTime
-	if (deltaTicks == 0) {
-		deltaTicks = 1;
-	}
-	io.DeltaTime = deltaTicks / 1000.0f;
-	g_LastTicks = currentTicks;
-	
+
+	// Start new ImGui frame using SDL2 backends
+	ImGui_ImplSDLRenderer2_NewFrame();
+	ImGui_ImplSDL2_NewFrame();
 	ImGui::NewFrame();
 }
 
@@ -170,72 +163,13 @@ void CImGuiManager::ProcessEvent(SDL_Event* event)
 	if (!m_bInitialized || !event) {
 		return;
 	}
-	
+
 	ImGui::SetCurrentContext(m_pContext);
-	ImGuiIO& io = ImGui::GetIO();
-	
-	switch (event->type) {
-	case SDL_MOUSEMOTION:
-		io.AddMousePosEvent((float)event->motion.x, (float)event->motion.y);
-		break;
-	case SDL_MOUSEBUTTONDOWN:
-	case SDL_MOUSEBUTTONUP:
-	{
-		int button = -1;
-		if (event->button.button == SDL_BUTTON_LEFT) button = 0;
-		if (event->button.button == SDL_BUTTON_RIGHT) button = 1;
-		if (event->button.button == SDL_BUTTON_MIDDLE) button = 2;
-		if (button != -1) {
-			io.AddMouseButtonEvent(button, event->type == SDL_MOUSEBUTTONDOWN);
-		}
-		break;
-	}
-	// SDL 1.2 doesn't have SDL_MOUSEWHEEL - handle via button events
-	// Mouse wheel is handled as button events in SDL 1.2
-	case SDL_KEYDOWN:
-	case SDL_KEYUP:
-	{
-		int key = event->key.keysym.sym;
-		// Map SDL keys to ImGui keys
-		ImGuiKey imgui_key = ImGuiKey_None;
-		if (key >= SDLK_a && key <= SDLK_z) {
-			imgui_key = (ImGuiKey)(ImGuiKey_A + (key - SDLK_a));
-		} else if (key >= SDLK_0 && key <= SDLK_9) {
-			imgui_key = (ImGuiKey)(ImGuiKey_0 + (key - SDLK_0));
-		} else {
-			switch (key) {
-			case SDLK_TAB: imgui_key = ImGuiKey_Tab; break;
-			case SDLK_LEFT: imgui_key = ImGuiKey_LeftArrow; break;
-			case SDLK_RIGHT: imgui_key = ImGuiKey_RightArrow; break;
-			case SDLK_UP: imgui_key = ImGuiKey_UpArrow; break;
-			case SDLK_DOWN: imgui_key = ImGuiKey_DownArrow; break;
-			case SDLK_PAGEUP: imgui_key = ImGuiKey_PageUp; break;
-			case SDLK_PAGEDOWN: imgui_key = ImGuiKey_PageDown; break;
-			case SDLK_HOME: imgui_key = ImGuiKey_Home; break;
-			case SDLK_END: imgui_key = ImGuiKey_End; break;
-			case SDLK_INSERT: imgui_key = ImGuiKey_Insert; break;
-			case SDLK_DELETE: imgui_key = ImGuiKey_Delete; break;
-			case SDLK_BACKSPACE: imgui_key = ImGuiKey_Backspace; break;
-			case SDLK_SPACE: imgui_key = ImGuiKey_Space; break;
-			case SDLK_RETURN: imgui_key = ImGuiKey_Enter; break;
-			case SDLK_ESCAPE: imgui_key = ImGuiKey_Escape; break;
-			case SDLK_LCTRL: case SDLK_RCTRL: imgui_key = ImGuiKey_LeftCtrl; break;
-			case SDLK_LSHIFT: case SDLK_RSHIFT: imgui_key = ImGuiKey_LeftShift; break;
-			case SDLK_LALT: case SDLK_RALT: imgui_key = ImGuiKey_LeftAlt; break;
-			case SDLK_LSUPER: case SDLK_RSUPER: imgui_key = ImGuiKey_LeftSuper; break;
-			}
-		}
-		if (imgui_key != ImGuiKey_None) {
-			io.AddKeyEvent(imgui_key, event->type == SDL_KEYDOWN);
-		}
-		
-		// Handle text input
-		if (event->type == SDL_KEYDOWN && event->key.keysym.unicode && event->key.keysym.unicode < 0x10000) {
-			io.AddInputCharacter((unsigned short)event->key.keysym.unicode);
-		}
-		break;
-	}
-	}
+
+	// Forward SDL2 events to ImGui backend
+	// The SDL2 backend handles all input mapping automatically:
+	// mouse, keyboard, text input, mouse wheel, window events, etc.
+	ImGui_ImplSDL2_ProcessEvent(event);
 }
 
 void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, const char* connectedDeviceName, bool isServerRunning)
@@ -253,34 +187,28 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiIO& io = ImGui::GetIO();
 
-	// Calculate window size: 75% of screen width and height
+	// Fill entire window (no black margins on home screen)
 	float screenWidth = io.DisplaySize.x;
 	float screenHeight = io.DisplaySize.y;
 
-	float windowWidth, windowHeight;
-	if (screenWidth > 0 && screenHeight > 0) {
-		windowWidth = screenWidth * 0.75f;
-		windowHeight = screenHeight * 0.75f;
-	} else {
-		// Fallback if display size unavailable
-		windowWidth = 1440.0f;
-		windowHeight = 810.0f;
-	}
+	float windowWidth = (screenWidth > 0) ? screenWidth : 1920.0f;
+	float windowHeight = (screenHeight > 0) ? screenHeight : 1080.0f;
 
-	// Center the window
-	ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(windowWidth, windowHeight), ImGuiCond_Always);
-	ImGui::SetNextWindowBgAlpha(0.95f);
+	ImGui::SetNextWindowBgAlpha(1.0f);
 
-	// Push minimal styling for home screen
+	// Push minimal styling for home screen (no rounding for edge-to-edge fill)
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
 	ImGui::Begin("AirPlay Server", NULL,
 		ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-		ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+		ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+		ImGuiWindowFlags_NoTitleBar);
 
 	// Calculate content area for centering
 	float contentWidth = windowWidth - 16.0f;
@@ -333,24 +261,43 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 
 		if (ImGui::BeginTabItem("Good Quality", NULL, goodFlags)) {
 			m_qualityPreset = QUALITY_GOOD;
-			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "30 FPS - Best video quality");
-			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Uses high-quality Lanczos scaling");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "30 FPS - Maximum quality per frame");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Best filtering, highest fidelity");
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Balanced", NULL, balancedFlags)) {
 			m_qualityPreset = QUALITY_BALANCED;
-			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "60 FPS - Good balance");
-			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Uses fast bilinear scaling");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "60 FPS - Smooth + high quality");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Best filtering, full frame rate");
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Fast Speed", NULL, fastFlags)) {
 			m_qualityPreset = QUALITY_FAST;
 			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "60 FPS - Lowest latency");
-			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Uses nearest-neighbor scaling");
+			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Linear filtering, minimal processing");
 			ImGui::EndTabItem();
 		}
 		ImGui::EndTabBar();
 	}
+
+	ImGui::Dummy(ImVec2(0, 4.0f));
+	ImGui::Separator();
+	ImGui::Dummy(ImVec2(0, 4.0f));
+
+	// Audio section
+	float audioLabelWidth = ImGui::CalcTextSize("Audio").x;
+	ImGui::SetCursorPosX((windowWidth - audioLabelWidth) * 0.5f - padding);
+	ImGui::Text("Audio");
+
+	// Center the volume slider
+	float sliderWidth = contentWidth * 0.5f;
+	ImGui::SetCursorPosX((windowWidth - sliderWidth) * 0.5f - padding);
+	ImGui::PushItemWidth(sliderWidth);
+	int localPct = (int)(m_localVolume * 100.0f);
+	if (ImGui::SliderInt("##Volume", &localPct, 0, 100, "%d%%")) {
+		m_localVolume = localPct / 100.0f;
+	}
+	ImGui::PopItemWidth();
 
 	ImGui::Dummy(ImVec2(0, 4.0f));
 	ImGui::Separator();
@@ -400,13 +347,13 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isConnected, c
 	ImGui::Dummy(ImVec2(0, 8.0f));
 
 	// Keyboard shortcuts reference
-	const char* shortcuts = "H: Toggle UI | F: Fullscreen | Esc: Exit Fullscreen";
+	const char* shortcuts = "F1: Perf | H: Toggle UI | F: Fullscreen | Esc: Exit FS";
 	float shortcutsWidth = ImGui::CalcTextSize(shortcuts).x;
 	ImGui::SetCursorPosX((windowWidth - shortcutsWidth) * 0.5f - padding);
 	ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "%s", shortcuts);
 
 	ImGui::End();
-	ImGui::PopStyleVar(3);
+	ImGui::PopStyleVar(5);
 }
 
 void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool isConnected, const char* connectedDeviceName,
@@ -429,63 +376,56 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 	// Toggle UI with H key
 	ImGuiIO& io = ImGui::GetIO();
 	if (ImGui::IsKeyPressed(ImGuiKey_H)) {
-		bool wasVisible = *pShowUI;
 		*pShowUI = !*pShowUI;
-		// If we just hid the UI, set flag to trigger surface clear
-		if (wasVisible && !*pShowUI) {
-			m_bUIVisibilityChanged = true;
-		}
 	}
 
 	if (!*pShowUI) {
-		// Don't render anything when UI is hidden - just return
-		// The video will cover the full screen
 		return;
 	}
-	
+
 	// Render overlay UI in corner with semi-transparent background
 	ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
 	ImGui::SetNextWindowBgAlpha(0.85f); // Semi-transparent for overlay
 	ImGui::Begin("AirPlay Controls", pShowUI, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-	
+
 	ImGui::Text("Device: %s", deviceName ? deviceName : "Unknown");
-	
+
 	if (isConnected) {
 		ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "Connected");
 		if (connectedDeviceName) {
 			ImGui::Text("From: %s", connectedDeviceName);
 		}
-		
+
 		// Display video statistics when streaming
 		if (videoWidth > 0 && videoHeight > 0) {
 			ImGui::Separator();
 			ImGui::Text("Video Information:");
 			ImGui::Text("Resolution: %d x %d", videoWidth, videoHeight);
-			
+
 			if (fps > 0.0f) {
 				ImGui::Text("Frame Rate: %.2f FPS", fps);
 			} else {
 				ImGui::Text("Frame Rate: Calculating...");
 			}
-			
+
 			if (bitrateMbps > 0.0f) {
 				ImGui::Text("Bitrate: %.2f Mbps", bitrateMbps);
 			} else {
 				ImGui::Text("Bitrate: Calculating...");
 			}
-			
+
 			ImGui::Text("Total Frames: %llu", totalFrames);
-			
+
 			if (droppedFrames > 0) {
 				ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Dropped Frames: %llu", droppedFrames);
 			} else {
 				ImGui::Text("Dropped Frames: %llu", droppedFrames);
 			}
-			
+
 			// Calculate aspect ratio
 			float aspectRatio = (float)videoWidth / (float)videoHeight;
 			ImGui::Text("Aspect Ratio: %.2f:1", aspectRatio);
-			
+
 		}
 	} else {
 		ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "Waiting...");
@@ -504,17 +444,17 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 
 		if (ImGui::BeginTabItem("Good", NULL, goodFlags)) {
 			m_qualityPreset = QUALITY_GOOD;
-			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "30fps, HQ");
+			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "30fps, Best");
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Balanced", NULL, balancedFlags)) {
 			m_qualityPreset = QUALITY_BALANCED;
-			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "60fps, Normal");
+			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "60fps, Best");
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Fast", NULL, fastFlags)) {
 			m_qualityPreset = QUALITY_FAST;
-			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "60fps, Low");
+			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "60fps, Linear");
 			ImGui::EndTabItem();
 		}
 		ImGui::EndTabBar();
@@ -525,9 +465,17 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 	// Audio Controls Section
 	ImGui::Text("Audio:");
 
+	// Local volume slider
+	ImGui::PushItemWidth(100.0f);
+	int localPct = (int)(m_localVolume * 100.0f);
+	if (ImGui::SliderInt("Volume", &localPct, 0, 100, "%d%%")) {
+		m_localVolume = localPct / 100.0f;
+	}
+	ImGui::PopItemWidth();
+
 	// Device volume display (read-only - controlled by the streaming device)
 	int volumePercent = (int)(m_deviceVolume * 100.0f);
-	ImGui::Text("Device Volume: %d%%", volumePercent);
+	ImGui::Text("Device: %d%%", volumePercent);
 
 	// Volume bar visualization
 	{
@@ -578,248 +526,292 @@ void CImGuiManager::RenderOverlay(bool* pShowUI, const char* deviceName, bool is
 	}
 
 	ImGui::Separator();
-	ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "H: Toggle UI | F: Fullscreen | Esc: Exit FS");
+	ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "F1: Perf | H: Toggle UI | F: Fullscreen | Esc: Exit FS");
 
 	ImGui::End();
 }
 
-// Helper function to blend a pixel with alpha
-static inline void BlendPixel(Uint32* dst, Uint8 r, Uint8 g, Uint8 b, Uint8 a, SDL_PixelFormat* fmt)
+// Helper: draw a filled-area graph using ImDrawList
+// data is a circular buffer, offset is the write position (oldest data)
+static void DrawFilledGraph(ImDrawList* drawList, ImVec2 pos, ImVec2 size,
+	const float* data, int count, int offset, float minVal, float maxVal,
+	ImU32 lineColor, ImU32 fillColor)
 {
-	if (a == 0) return;
-	
-	if (a == 255) {
-		*dst = SDL_MapRGB(fmt, r, g, b);
+	// Background
+	drawList->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(15, 15, 15, 200));
+
+	if (count <= 1) return;
+
+	float range = maxVal - minVal;
+	if (range <= 0.0f) range = 1.0f;
+
+	// Build data points
+	float stepX = size.x / (float)(count - 1);
+
+	// Draw filled quads from bottom to data line
+	for (int i = 0; i < count - 1; i++) {
+		int idx0 = (offset + i) % count;
+		int idx1 = (offset + i + 1) % count;
+
+		float v0 = (data[idx0] - minVal) / range;
+		float v1 = (data[idx1] - minVal) / range;
+		if (v0 < 0.0f) v0 = 0.0f; if (v0 > 1.0f) v0 = 1.0f;
+		if (v1 < 0.0f) v1 = 0.0f; if (v1 > 1.0f) v1 = 1.0f;
+
+		float x0 = pos.x + stepX * (float)i;
+		float x1 = pos.x + stepX * (float)(i + 1);
+		float y0 = pos.y + size.y - v0 * size.y;
+		float y1 = pos.y + size.y - v1 * size.y;
+		float yBot = pos.y + size.y;
+
+		// Filled quad (two triangles)
+		drawList->AddQuadFilled(
+			ImVec2(x0, y0), ImVec2(x1, y1),
+			ImVec2(x1, yBot), ImVec2(x0, yBot),
+			fillColor);
+	}
+
+	// Draw line on top
+	for (int i = 0; i < count - 1; i++) {
+		int idx0 = (offset + i) % count;
+		int idx1 = (offset + i + 1) % count;
+
+		float v0 = (data[idx0] - minVal) / range;
+		float v1 = (data[idx1] - minVal) / range;
+		if (v0 < 0.0f) v0 = 0.0f; if (v0 > 1.0f) v0 = 1.0f;
+		if (v1 < 0.0f) v1 = 0.0f; if (v1 > 1.0f) v1 = 1.0f;
+
+		float x0 = pos.x + stepX * (float)i;
+		float x1 = pos.x + stepX * (float)(i + 1);
+		float y0 = pos.y + size.y - v0 * size.y;
+		float y1 = pos.y + size.y - v1 * size.y;
+
+		drawList->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), lineColor, 2.0f);
+	}
+
+	// Border
+	drawList->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(60, 60, 60, 200));
+}
+
+void CImGuiManager::RenderPerfGraphs(const SPerfData& perf)
+{
+	if (!m_bInitialized) {
 		return;
 	}
-	
-	Uint8 dr, dg, db;
-	SDL_GetRGB(*dst, fmt, &dr, &dg, &db);
-	
-	// Alpha blend using exact-equivalent shift trick (avoids slow division by 255)
-	// Formula: ((x + 128 + (x >> 8)) >> 8) == x / 255 for all x in [0, 65025]
-	unsigned int tr = r * a + dr * (255 - a);
-	unsigned int tg = g * a + dg * (255 - a);
-	unsigned int tb = b * a + db * (255 - a);
-	Uint8 nr = (Uint8)((tr + 128 + (tr >> 8)) >> 8);
-	Uint8 ng = (Uint8)((tg + 128 + (tg >> 8)) >> 8);
-	Uint8 nb = (Uint8)((tb + 128 + (tb >> 8)) >> 8);
-	
-	*dst = SDL_MapRGB(fmt, nr, ng, nb);
-}
 
-// Helper to get pixel pointer
-static inline Uint32* GetPixel(SDL_Surface* surface, int x, int y)
-{
-	if (x < 0 || y < 0 || x >= surface->w || y >= surface->h) return NULL;
-	return (Uint32*)((Uint8*)surface->pixels + y * surface->pitch + x * surface->format->BytesPerPixel);
-}
-
-// Draw a horizontal line with alpha blending
-static void DrawHLine(SDL_Surface* surface, int x1, int x2, int y, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
-{
-	if (y < 0 || y >= surface->h) return;
-	if (x1 > x2) { int t = x1; x1 = x2; x2 = t; }
-	if (x1 < 0) x1 = 0;
-	if (x2 >= surface->w) x2 = surface->w - 1;
-	if (x1 > x2) return;
-	
-	for (int x = x1; x <= x2; x++) {
-		Uint32* pixel = GetPixel(surface, x, y);
-		if (pixel) BlendPixel(pixel, r, g, b, a, surface->format);
-	}
-}
-
-// Simple filled rectangle drawing
-static void FillRect(SDL_Surface* surface, int x, int y, int w, int h, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
-{
-	for (int py = y; py < y + h; py++) {
-		DrawHLine(surface, x, x + w - 1, py, r, g, b, a);
-	}
-}
-
-// Edge function for triangle rasterization (returns positive if point is on the left of the edge)
-static inline float EdgeFunction(float ax, float ay, float bx, float by, float cx, float cy)
-{
-	return (cx - ax) * (by - ay) - (cy - ay) * (bx - ax);
-}
-
-void CImGuiManager::Render(SDL_Surface* surface)
-{
-	if (!m_bInitialized || !surface) {
-		return;
-	}
-	
 	ImGui::SetCurrentContext(m_pContext);
-	ImGui::Render();
-	
-	ImDrawData* drawData = ImGui::GetDrawData();
-	if (!drawData || drawData->CmdListsCount == 0) {
-		return;
-	}
-	
-	// Lock surface for drawing
-	if (SDL_MUSTLOCK(surface)) {
-		SDL_LockSurface(surface);
-	}
-	
-	// Get font texture data for text rendering
 	ImGuiIO& io = ImGui::GetIO();
-	unsigned char* fontPixels = NULL;
-	int fontWidth, fontHeight;
-	io.Fonts->GetTexDataAsRGBA32(&fontPixels, &fontWidth, &fontHeight);
-	
-	// Render each draw list
-	for (int n = 0; n < drawData->CmdListsCount; n++) {
-		const ImDrawList* cmdList = drawData->CmdLists[n];
-		const ImDrawVert* vtxBuffer = cmdList->VtxBuffer.Data;
-		const ImDrawIdx* idxBuffer = cmdList->IdxBuffer.Data;
-		
-		for (int cmdIdx = 0; cmdIdx < cmdList->CmdBuffer.Size; cmdIdx++) {
-			const ImDrawCmd* pcmd = &cmdList->CmdBuffer[cmdIdx];
-			
-			if (pcmd->UserCallback) {
-				pcmd->UserCallback(cmdList, pcmd);
-				continue;
-			}
-			
-			// Get clip rect
-			int clipX1 = (int)pcmd->ClipRect.x;
-			int clipY1 = (int)pcmd->ClipRect.y;
-			int clipX2 = (int)pcmd->ClipRect.z;
-			int clipY2 = (int)pcmd->ClipRect.w;
-			
-			// Check if this is textured (font rendering)
-			bool isTextured = (pcmd->GetTexID() != 0) && fontPixels;
-			
-			// Render triangles
-			for (unsigned int i = 0; i < pcmd->ElemCount; i += 3) {
-				const ImDrawVert& v0 = vtxBuffer[idxBuffer[pcmd->IdxOffset + i + 0]];
-				const ImDrawVert& v1 = vtxBuffer[idxBuffer[pcmd->IdxOffset + i + 1]];
-				const ImDrawVert& v2 = vtxBuffer[idxBuffer[pcmd->IdxOffset + i + 2]];
-				
-				// Bounding box
-				int minX = (int)floorf(fminf(fminf(v0.pos.x, v1.pos.x), v2.pos.x));
-				int maxX = (int)ceilf(fmaxf(fmaxf(v0.pos.x, v1.pos.x), v2.pos.x));
-				int minY = (int)floorf(fminf(fminf(v0.pos.y, v1.pos.y), v2.pos.y));
-				int maxY = (int)ceilf(fmaxf(fmaxf(v0.pos.y, v1.pos.y), v2.pos.y));
-				
-				// Clip to screen and clip rect
-				if (minX < clipX1) minX = clipX1;
-				if (minY < clipY1) minY = clipY1;
-				if (maxX > clipX2) maxX = clipX2;
-				if (maxY > clipY2) maxY = clipY2;
-				if (minX < 0) minX = 0;
-				if (minY < 0) minY = 0;
-				if (maxX >= surface->w) maxX = surface->w - 1;
-				if (maxY >= surface->h) maxY = surface->h - 1;
-				
-				if (minX > maxX || minY > maxY) continue;
-				
-				// Calculate triangle area for barycentric coords
-				float area = EdgeFunction(v0.pos.x, v0.pos.y, v1.pos.x, v1.pos.y, v2.pos.x, v2.pos.y);
-				if (fabsf(area) < 0.001f) continue; // Degenerate triangle
-				float invArea = 1.0f / area;
-				
-				// Rasterize triangle
-				for (int y = minY; y <= maxY; y++) {
-					for (int x = minX; x <= maxX; x++) {
-						float px = x + 0.5f;
-						float py = y + 0.5f;
-						
-						// Barycentric coordinates using edge functions
-						float w0 = EdgeFunction(v1.pos.x, v1.pos.y, v2.pos.x, v2.pos.y, px, py);
-						float w1 = EdgeFunction(v2.pos.x, v2.pos.y, v0.pos.x, v0.pos.y, px, py);
-						float w2 = EdgeFunction(v0.pos.x, v0.pos.y, v1.pos.x, v1.pos.y, px, py);
-						
-						// Check if point is inside triangle (all same sign)
-						bool inside = (area > 0) ? (w0 >= 0 && w1 >= 0 && w2 >= 0) : (w0 <= 0 && w1 <= 0 && w2 <= 0);
-						
-						if (inside) {
-							// Normalize barycentric coordinates
-							w0 *= invArea;
-							w1 *= invArea;
-							w2 *= invArea;
-							
-							// Interpolate color
-							ImU32 col0 = v0.col, col1 = v1.col, col2 = v2.col;
-							float r = w0 * ((col0 >> IM_COL32_R_SHIFT) & 0xFF) + w1 * ((col1 >> IM_COL32_R_SHIFT) & 0xFF) + w2 * ((col2 >> IM_COL32_R_SHIFT) & 0xFF);
-							float g = w0 * ((col0 >> IM_COL32_G_SHIFT) & 0xFF) + w1 * ((col1 >> IM_COL32_G_SHIFT) & 0xFF) + w2 * ((col2 >> IM_COL32_G_SHIFT) & 0xFF);
-							float b = w0 * ((col0 >> IM_COL32_B_SHIFT) & 0xFF) + w1 * ((col1 >> IM_COL32_B_SHIFT) & 0xFF) + w2 * ((col2 >> IM_COL32_B_SHIFT) & 0xFF);
-							float a = w0 * ((col0 >> IM_COL32_A_SHIFT) & 0xFF) + w1 * ((col1 >> IM_COL32_A_SHIFT) & 0xFF) + w2 * ((col2 >> IM_COL32_A_SHIFT) & 0xFF);
-							
-							Uint8 finalR = (Uint8)(r > 255 ? 255 : r);
-							Uint8 finalG = (Uint8)(g > 255 ? 255 : g);
-							Uint8 finalB = (Uint8)(b > 255 ? 255 : b);
-							Uint8 finalA = (Uint8)(a > 255 ? 255 : a);
-							
-							// Sample texture if textured (font atlas)
-							if (isTextured) {
-								float u = w0 * v0.uv.x + w1 * v1.uv.x + w2 * v2.uv.x;
-								float v = w0 * v0.uv.y + w1 * v1.uv.y + w2 * v2.uv.y;
 
-								// Convert UV to texel coordinates with bilinear filtering for smooth text
-								float tx = u * fontWidth - 0.5f;
-								float ty = v * fontHeight - 0.5f;
+	// Position in top-right corner
+	float windowWidth = 340.0f * m_dpiScale;
+	float margin = 10.0f;
+	ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - windowWidth - margin, margin), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(windowWidth, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.88f);
 
-								int tx0 = (int)floorf(tx);
-								int ty0 = (int)floorf(ty);
-								int tx1 = tx0 + 1;
-								int ty1 = ty0 + 1;
+	ImGui::Begin("Performance", NULL,
+		ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+		ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
 
-								float fx = tx - tx0;
-								float fy = ty - ty0;
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	float graphWidth = windowWidth - 16.0f * m_dpiScale;
+	float graphHeight = 36.0f * m_dpiScale;
+	ImU32 scaleColor = IM_COL32(100, 100, 100, 160);
 
-								// Clamp to texture bounds
-								if (tx0 < 0) tx0 = 0;
-								if (ty0 < 0) ty0 = 0;
-								if (tx1 >= fontWidth) tx1 = fontWidth - 1;
-								if (ty1 >= fontHeight) ty1 = fontHeight - 1;
-								if (tx0 >= fontWidth) tx0 = fontWidth - 1;
-								if (ty0 >= fontHeight) ty0 = fontHeight - 1;
+	// --- Source FPS graph (blue, 0-80) ---
+	{
+		char label[64];
+		snprintf(label, sizeof(label), "Source FPS: %.1f", perf.sourceFps);
+		ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", label);
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(graphWidth, graphHeight));
+		DrawFilledGraph(drawList, pos, ImVec2(graphWidth, graphHeight),
+			perf.sourceFpsHistory, perf.historySize, perf.currentIdx, 0.0f, 80.0f,
+			IM_COL32(100, 200, 255, 255), IM_COL32(100, 200, 255, 40));
+		drawList->AddText(ImVec2(pos.x + 2, pos.y), scaleColor, "80");
+		drawList->AddText(ImVec2(pos.x + 2, pos.y + graphHeight - 12), scaleColor, "0");
+	}
 
-								// Sample 4 texels for bilinear interpolation
-								unsigned char* t00 = fontPixels + (ty0 * fontWidth + tx0) * 4;
-								unsigned char* t10 = fontPixels + (ty0 * fontWidth + tx1) * 4;
-								unsigned char* t01 = fontPixels + (ty1 * fontWidth + tx0) * 4;
-								unsigned char* t11 = fontPixels + (ty1 * fontWidth + tx1) * 4;
+	ImGui::Spacing();
 
-								// Bilinear interpolation of alpha channel
-								float a00 = t00[3], a10 = t10[3], a01 = t01[3], a11 = t11[3];
-								float texAlpha = a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) +
-								                 a01 * (1 - fx) * fy + a11 * fx * fy;
-
-								// Multiply alpha by texture alpha (shift trick avoids division)
-								unsigned int ta = finalA * (unsigned int)texAlpha;
-								finalA = (Uint8)((ta + 128 + (ta >> 8)) >> 8);
-							}
-							
-							if (finalA > 0) {
-								Uint32* pixel = GetPixel(surface, x, y);
-								if (pixel) {
-									BlendPixel(pixel, finalR, finalG, finalB, finalA, surface->format);
-								}
-							}
-						}
-					}
-				}
-			}
+	// --- Display FPS graph (cyan, 0-80) ---
+	{
+		char label[64];
+		snprintf(label, sizeof(label), "Display FPS: %.1f  (target: %.0f)", perf.displayFps, perf.targetFps);
+		ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.9f, 1.0f), "%s", label);
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(graphWidth, graphHeight));
+		DrawFilledGraph(drawList, pos, ImVec2(graphWidth, graphHeight),
+			perf.displayFpsHistory, perf.historySize, perf.currentIdx, 0.0f, 80.0f,
+			IM_COL32(50, 255, 230, 255), IM_COL32(50, 255, 230, 40));
+		drawList->AddText(ImVec2(pos.x + 2, pos.y), scaleColor, "80");
+		drawList->AddText(ImVec2(pos.x + 2, pos.y + graphHeight - 12), scaleColor, "0");
+		// Draw target FPS line
+		float targetNorm = perf.targetFps / 80.0f;
+		if (targetNorm > 0.0f && targetNorm <= 1.0f) {
+			float yTarget = pos.y + graphHeight - targetNorm * graphHeight;
+			drawList->AddLine(ImVec2(pos.x, yTarget), ImVec2(pos.x + graphWidth, yTarget),
+				IM_COL32(255, 255, 255, 60), 1.0f);
 		}
 	}
-	
-	if (SDL_MUSTLOCK(surface)) {
-		SDL_UnlockSurface(surface);
+
+	ImGui::Spacing();
+
+	// --- Frame Time graph (green, 0-33ms) ---
+	{
+		char label[64];
+		snprintf(label, sizeof(label), "Frame Time: %.2f ms", perf.frameTimeMs);
+		ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", label);
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(graphWidth, graphHeight));
+		DrawFilledGraph(drawList, pos, ImVec2(graphWidth, graphHeight),
+			perf.frameTimeHistory, perf.historySize, perf.currentIdx, 0.0f, 33.0f,
+			IM_COL32(100, 255, 100, 255), IM_COL32(100, 255, 100, 40));
+		drawList->AddText(ImVec2(pos.x + 2, pos.y), scaleColor, "33ms");
+		drawList->AddText(ImVec2(pos.x + 2, pos.y + graphHeight - 12), scaleColor, "0");
 	}
-	
-	// Note: Don't call SDL_UpdateRect here - it interferes with YUV overlay video
-	// The display is updated by SDL_DisplayYUVOverlay for video, or SDL_Flip elsewhere
+
+	ImGui::Spacing();
+
+	// --- Decode-to-Display Latency graph (orange, 0-33ms) ---
+	{
+		char label[64];
+		snprintf(label, sizeof(label), "Decode-to-Display: %.2f ms", perf.latencyMs);
+		ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", label);
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(graphWidth, graphHeight));
+		DrawFilledGraph(drawList, pos, ImVec2(graphWidth, graphHeight),
+			perf.latencyHistory, perf.historySize, perf.currentIdx, 0.0f, 33.0f,
+			IM_COL32(255, 200, 80, 255), IM_COL32(255, 200, 80, 40));
+		drawList->AddText(ImVec2(pos.x + 2, pos.y), scaleColor, "33ms");
+		drawList->AddText(ImVec2(pos.x + 2, pos.y + graphHeight - 12), scaleColor, "0");
+	}
+
+	ImGui::Spacing();
+
+	// --- Bitrate graph (purple, 0-50 Mbps) ---
+	{
+		char label[64];
+		snprintf(label, sizeof(label), "Bitrate: %.2f Mbps", perf.bitrateMbps);
+		ImGui::TextColored(ImVec4(0.8f, 0.5f, 1.0f, 1.0f), "%s", label);
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(graphWidth, graphHeight));
+		DrawFilledGraph(drawList, pos, ImVec2(graphWidth, graphHeight),
+			perf.bitrateHistory, perf.historySize, perf.currentIdx, 0.0f, 50.0f,
+			IM_COL32(200, 130, 255, 255), IM_COL32(200, 130, 255, 40));
+		drawList->AddText(ImVec2(pos.x + 2, pos.y), scaleColor, "50");
+		drawList->AddText(ImVec2(pos.x + 2, pos.y + graphHeight - 12), scaleColor, "0");
+	}
+
+	ImGui::Spacing();
+
+	// --- Audio Buffer graph (yellow, 0-20 frames) ---
+	{
+		char label[64];
+		snprintf(label, sizeof(label), "Audio Buffer: %d frames", perf.audioQueueSize);
+		ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.3f, 1.0f), "%s", label);
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(graphWidth, graphHeight));
+		DrawFilledGraph(drawList, pos, ImVec2(graphWidth, graphHeight),
+			perf.audioQueueHistory, perf.historySize, perf.currentIdx, 0.0f, 20.0f,
+			IM_COL32(255, 230, 80, 255), IM_COL32(255, 230, 80, 40));
+		drawList->AddText(ImVec2(pos.x + 2, pos.y), scaleColor, "20");
+		drawList->AddText(ImVec2(pos.x + 2, pos.y + graphHeight - 12), scaleColor, "0");
+	}
+
+	ImGui::Spacing();
+	ImGui::Separator();
+
+	// === STATS PANEL ===
+	ImVec4 labelColor = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+	ImVec4 valueColor = ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+	ImVec4 warnColor = ImVec4(1.0f, 0.5f, 0.0f, 1.0f);
+	ImVec4 goodColor = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);
+
+	// Video info
+	if (perf.videoWidth > 0 && perf.videoHeight > 0) {
+		// Resolution with aspect ratio
+		float ar = (float)perf.videoWidth / (float)perf.videoHeight;
+		const char* arLabel = "";
+		if (ar > 1.76f && ar < 1.78f) arLabel = "16:9";
+		else if (ar > 1.59f && ar < 1.61f) arLabel = "16:10";
+		else if (ar > 1.32f && ar < 1.34f) arLabel = "4:3";
+		else if (ar > 2.32f && ar < 2.35f) arLabel = "21:9";
+
+		ImGui::TextColored(labelColor, "Video");
+		ImGui::SameLine(80.0f * m_dpiScale);
+		ImGui::TextColored(valueColor, "%dx%d %s", perf.videoWidth, perf.videoHeight, arLabel);
+
+		// Data transferred
+		ImGui::TextColored(labelColor, "Data");
+		ImGui::SameLine(80.0f * m_dpiScale);
+		if (perf.totalBytes > 1073741824ULL) {
+			ImGui::TextColored(valueColor, "%.2f GB", (float)perf.totalBytes / 1073741824.0f);
+		} else {
+			ImGui::TextColored(valueColor, "%.1f MB", (float)perf.totalBytes / 1048576.0f);
+		}
+	}
+
+	// Frame counters
+	ImGui::TextColored(labelColor, "Frames");
+	ImGui::SameLine(80.0f * m_dpiScale);
+	if (perf.droppedFrames > 0) {
+		ImGui::TextColored(warnColor, "%llu  (%llu dropped)", perf.totalFrames, perf.droppedFrames);
+	} else {
+		ImGui::TextColored(valueColor, "%llu", perf.totalFrames);
+	}
+
+	// Audio stats
+	ImGui::TextColored(labelColor, "Audio");
+	ImGui::SameLine(80.0f * m_dpiScale);
+	if (perf.audioUnderruns > 0 || perf.audioDropped > 0) {
+		ImGui::TextColored(warnColor, "%d underruns, %d dropped", perf.audioUnderruns, perf.audioDropped);
+	} else {
+		ImGui::TextColored(goodColor, "OK");
+	}
+
+	// Connection time
+	if (perf.connectionTimeSec > 0.0f) {
+		ImGui::TextColored(labelColor, "Uptime");
+		ImGui::SameLine(80.0f * m_dpiScale);
+		int totalSec = (int)perf.connectionTimeSec;
+		int hours = totalSec / 3600;
+		int mins = (totalSec % 3600) / 60;
+		int secs = totalSec % 60;
+		if (hours > 0) {
+			ImGui::TextColored(valueColor, "%dh %02dm %02ds", hours, mins, secs);
+		} else if (mins > 0) {
+			ImGui::TextColored(valueColor, "%dm %02ds", mins, secs);
+		} else {
+			ImGui::TextColored(valueColor, "%ds", secs);
+		}
+	}
+
+	ImGui::Spacing();
+	ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.35f, 1.0f), "30s window | F1: Close");
+
+	ImGui::End();
+}
+
+void CImGuiManager::Render()
+{
+	if (!m_bInitialized) {
+		return;
+	}
+
+	ImGui::SetCurrentContext(m_pContext);
+	ImGui::Render();
+
+	// GPU-accelerated rendering via SDL2Renderer backend
+	ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), m_pRenderer);
 }
 
 void CImGuiManager::SetupStyle()
 {
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiStyle& style = ImGui::GetStyle();
-	
+
 	// Modern styling: minimal rounding, tight spacing
 	style.WindowRounding = 4.0f;
 	style.ChildRounding = 4.0f;
@@ -830,7 +822,7 @@ void CImGuiManager::SetupStyle()
 	style.TabRounding = 3.0f;
 	style.TreeLinesRounding = 2.0f;
 	style.DragDropTargetRounding = 4.0f;
-	
+
 	// Minimal padding and spacing
 	style.WindowPadding = ImVec2(6.0f, 6.0f);
 	style.FramePadding = ImVec2(4.0f, 2.0f);
@@ -841,7 +833,7 @@ void CImGuiManager::SetupStyle()
 	style.SeparatorTextPadding = ImVec2(4.0f, 2.0f);
 	style.DisplayWindowPadding = ImVec2(8.0f, 8.0f);
 	style.DisplaySafeAreaPadding = ImVec2(2.0f, 2.0f);
-	
+
 	// Borders and sizes
 	style.WindowBorderSize = 1.0f;
 	style.ChildBorderSize = 1.0f;
@@ -852,7 +844,7 @@ void CImGuiManager::SetupStyle()
 	style.DragDropTargetBorderSize = 2.0f;
 	style.ImageBorderSize = 0.0f;
 	style.SeparatorTextBorderSize = 1.0f;
-	
+
 	// Spacing and sizing
 	style.IndentSpacing = 14.0f;
 	style.ColumnsMinSpacing = 4.0f;
@@ -867,39 +859,39 @@ void CImGuiManager::SetupStyle()
 	style.TabBarOverlineSize = 2.0f;
 	style.TreeLinesSize = 1.0f;
 	style.DragDropTargetPadding = 4.0f;
-	
+
 	// Window settings
 	style.WindowMinSize = ImVec2(32.0f, 32.0f);
 	style.WindowTitleAlign = ImVec2(0.0f, 0.5f);
 	style.WindowMenuButtonPosition = ImGuiDir_Left;
 	style.WindowBorderHoverPadding = 4.0f;
-	
+
 	// Table settings
 	style.TableAngledHeadersAngle = 35.0f;
 	style.TableAngledHeadersTextAlign = ImVec2(0.0f, 0.0f);
-	
+
 	// Button and selectable alignment
 	style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
 	style.SelectableTextAlign = ImVec2(0.0f, 0.0f);
 	style.SeparatorTextAlign = ImVec2(0.0f, 0.5f);
-	
+
 	// Color button position
 	style.ColorButtonPosition = ImGuiDir_Right;
-	
+
 	// Anti-aliasing
 	style.AntiAliasedLines = true;
 	style.AntiAliasedLinesUseTex = true;
 	style.AntiAliasedFill = true;
 	style.CurveTessellationTol = 1.25f;
 	style.CircleTessellationMaxError = 0.30f;
-	
+
 	// Alpha
 	style.Alpha = 1.0f;
 	style.DisabledAlpha = 0.60f;
-	
+
 	// Apply modern theme colors - all colors included
 	ImVec4* colors = style.Colors;
-	
+
 	// Text colors
 	colors[ImGuiCol_Text]                   = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
 	colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
@@ -958,10 +950,10 @@ void CImGuiManager::SetupStyle()
 	colors[ImGuiCol_ResizeGrip]             = ImVec4(0.40f, 0.40f, 0.40f, 0.20f);
 	colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.50f, 0.50f, 0.50f, 0.67f);
 	colors[ImGuiCol_ResizeGripActive]       = ImVec4(0.60f, 0.60f, 0.60f, 0.95f);
-	
+
 	// Input text
 	colors[ImGuiCol_InputTextCursor]        = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
-	
+
 	// Tab colors
 	colors[ImGuiCol_Tab]                    = ImVec4(0.20f, 0.20f, 0.20f, 0.86f);
 	colors[ImGuiCol_TabHovered]             = ImVec4(0.35f, 0.35f, 0.35f, 0.80f);
@@ -970,20 +962,20 @@ void CImGuiManager::SetupStyle()
 	colors[ImGuiCol_TabDimmed]              = ImVec4(0.10f, 0.10f, 0.10f, 0.97f);
 	colors[ImGuiCol_TabDimmedSelected]       = ImVec4(0.18f, 0.18f, 0.18f, 1.00f);
 	colors[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.40f, 0.40f, 0.40f, 0.00f);
-	
+
 	// Plot colors
 	colors[ImGuiCol_PlotLines]              = ImVec4(0.61f, 0.61f, 0.61f, 1.00f);
 	colors[ImGuiCol_PlotLinesHovered]       = ImVec4(1.00f, 0.43f, 0.35f, 1.00f);
 	colors[ImGuiCol_PlotHistogram]          = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
 	colors[ImGuiCol_PlotHistogramHovered]   = ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
-	
+
 	// Table colors
 	colors[ImGuiCol_TableHeaderBg]          = ImVec4(0.19f, 0.19f, 0.19f, 1.00f);
 	colors[ImGuiCol_TableBorderStrong]      = ImVec4(0.31f, 0.31f, 0.31f, 1.00f);
 	colors[ImGuiCol_TableBorderLight]       = ImVec4(0.23f, 0.23f, 0.23f, 1.00f);
 	colors[ImGuiCol_TableRowBg]             = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
 	colors[ImGuiCol_TableRowBgAlt]          = ImVec4(1.00f, 1.00f, 1.00f, 0.06f);
-	
+
 	// Tree lines
 	colors[ImGuiCol_TreeLines]              = ImVec4(0.30f, 0.30f, 0.30f, 0.50f);
 
@@ -995,10 +987,10 @@ void CImGuiManager::SetupStyle()
 	colors[ImGuiCol_NavCursor]              = ImVec4(0.70f, 0.70f, 0.70f, 1.00f);
 	colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
 	colors[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
-	
+
 	// Modal window
 	colors[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
-	
+
 	// Unsaved marker
 	colors[ImGuiCol_UnsavedMarker]          = ImVec4(1.00f, 0.00f, 0.00f, 1.00f);
 }
@@ -1054,6 +1046,12 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 	// Load auto-adjust
 	int autoAdj = GetPrivateProfileIntA("Audio", "AutoAdjust", 0, iniPath);
 	m_bAutoAdjust = (autoAdj != 0);
+
+	// Load local volume (stored as 0-100 integer)
+	int localVol = GetPrivateProfileIntA("Audio", "LocalVolume", 100, iniPath);
+	if (localVol < 0) localVol = 0;
+	if (localVol > 100) localVol = 100;
+	m_localVolume = localVol / 100.0f;
 }
 
 void CImGuiManager::SaveSettings(const char* iniPath)
@@ -1069,5 +1067,9 @@ void CImGuiManager::SaveSettings(const char* iniPath)
 
 	// Save auto-adjust
 	WritePrivateProfileStringA("Audio", "AutoAdjust", m_bAutoAdjust ? "1" : "0", iniPath);
-}
 
+	// Save local volume (stored as 0-100 integer)
+	char volBuf[16];
+	sprintf_s(volBuf, sizeof(volBuf), "%d", (int)(m_localVolume * 100.0f));
+	WritePrivateProfileStringA("Audio", "LocalVolume", volBuf, iniPath);
+}
