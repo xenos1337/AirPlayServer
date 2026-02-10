@@ -3,17 +3,10 @@
 #include "Airplay2Head.h"
 #include <queue>
 #include "SDL.h"
-#include "SDL_thread.h"
 #include "SDL_syswm.h"
 #undef main
 #include "CAirServer.h"
 #include "CImGuiManager.h"
-
-// FFmpeg for high-quality video scaling
-extern "C" {
-#include <libswscale/swscale.h>
-#include <libavutil/imgutils.h>
-}
 
 typedef void sdlAudioCallback(void* userdata, Uint8* stream, int len);
 
@@ -32,7 +25,6 @@ typedef std::queue<SFgVideoFrame*> SFgVideoFrameQueue;
 #define HIDE_WINDOW_CODE 3
 #define TOGGLE_FULLSCREEN_CODE 4
 #define WINDOW_RESIZE_CODE 5
-#define DOUBLE_CLICK_THRESHOLD_MS 400
 
 class CSDLPlayer
 {
@@ -65,20 +57,20 @@ public:
 	void requestHideWindow();  // Thread-safe: posts event to hide window
 	void requestToggleFullscreen();  // Thread-safe: posts event to toggle fullscreen
 
-	SDL_Surface* m_surface;      // Main screen surface (only touched by main thread)
-	SDL_Surface* m_videoBuffer;  // Off-screen buffer for video data (written by callback thread)
-	SDL_Overlay* m_yuv;
+	// SDL2 window, renderer, and textures (GPU-accelerated)
+	SDL_Window* m_window;
+	SDL_Renderer* m_renderer;
+	SDL_Texture* m_videoTexture;   // IYUV streaming texture (GPU does BT.709 colorspace + scaling)
 	SDL_Rect m_displayRect;      // Where to display the video (centered with letterbox)
-	
+
 	// Video source dimensions (from AirPlay stream)
 	int m_videoWidth;
 	int m_videoHeight;
-	
+
 	// Frame timing for smooth playback
 	unsigned long long m_lastFramePTS;      // PTS of last rendered frame
 	DWORD m_lastFrameTime;                  // System time when last frame was rendered
-	bool m_hasNewFrame;                     // Flag indicating new frame is available
-	
+
 	// Video statistics
 	unsigned long long m_totalFrames;       // Total frames received
 	unsigned long long m_droppedFrames;     // Frames dropped due to queue full
@@ -89,10 +81,6 @@ public:
 	DWORD m_bitrateStartTime;                // Start time for bitrate calculation
 	float m_currentBitrateMbps;             // Current bitrate in Mbps
 
-	// Frame skip for 30fps mode
-	unsigned int m_frameSkipCounter;        // Counter for frame skipping in Good Quality mode
-	volatile LONG m_currentQualityPreset;   // Thread-safe copy of quality preset for callback thread
-	
 	// Window dimensions
 	int m_windowWidth;
 	int m_windowHeight;
@@ -102,7 +90,9 @@ public:
 	SAudioFrameQueue m_queueAudio;
 	HANDLE m_mutexAudio;
 	HANDLE m_mutexVideo;
+	SDL_AudioDeviceID m_audioDeviceID;  // SDL2 audio device
 	volatile int m_audioVolume;  // SDL volume (0-128, where 128 = SDL_MIX_MAXVOLUME)
+	volatile int m_localVolume;  // Local volume from UI slider (0-128, SDL scale)
 
 	// Audio quality improvements
 	static const int AUDIO_BUFFER_SAMPLES = 1024;   // ~21ms at 48kHz (balanced latency/quality)
@@ -136,90 +126,83 @@ public:
 	bool m_bDumpAudio;
 	FILE* m_fileWav;
 
+	// Performance CSV log (written every frame while connected)
+	FILE* m_filePerfLog;
+	LARGE_INTEGER m_qpcPerfLogStart;      // QPC at first logged frame (t=0 reference)
+
 	CAirServer m_server;
 	char m_serverName[256];  // Server name for AirPlay display
 	CImGuiManager m_imgui;  // ImGui manager for UI overlay
-	
+
 	// Connection state for UI
 	bool m_bConnected;
 	char m_connectedDeviceName[256];
-	
+
 	// Disconnect transition (to render black screen briefly)
 	bool m_bDisconnecting;
 	DWORD m_dwDisconnectStartTime;
-	
+
 	void calculateDisplayRect();  // Calculate centered letterboxed display rect
-	void clearToBlack();          // Fill surface with black
 	void resizeWindow(int width, int height);  // Handle window resize
 
 	// Window handle for show/hide
 	HWND m_hwnd;
 	bool m_bWindowVisible;
-	
-	// Window subclassing for live resize
-	static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-	WNDPROC m_originalWndProc;
-	static CSDLPlayer* s_instance;  // For accessing instance from static callback
+
 	void handleLiveResize(int width, int height);
 	void requestResize(int width, int height);  // Thread-safe: posts event to resize window
 	volatile bool m_bResizing;  // Prevent re-entrancy during resize (volatile for thread safety)
 	volatile int m_pendingResizeWidth;   // Pending resize dimensions
 	volatile int m_pendingResizeHeight;
-	
-	// Fullscreen toggle on double-click
+
+	// Fullscreen toggle
 	void toggleFullscreen();
 	bool m_bFullscreen;
-	RECT m_windowedRect;      // Saved windowed position/size
-	LONG m_windowedStyle;     // Saved windowed style
-	LONG m_windowedExStyle;   // Saved windowed extended style
+	int m_windowedX;          // Saved windowed position
+	int m_windowedY;
+	int m_windowedW;          // Saved windowed size
+	int m_windowedH;
 
 	// Cursor auto-hide after inactivity
 	DWORD m_lastMouseMoveTime;  // Time of last mouse movement
 	bool m_bCursorHidden;       // Whether cursor is currently hidden
 	static const DWORD CURSOR_HIDE_DELAY_MS = 5000;  // Hide after 5 seconds
 
-	// 1:1 pixel mode - resize window to match video for crisp rendering
-	void resizeToVideoSize();  // Resize window to match video resolution exactly
-	bool m_b1to1PixelMode;     // When true, window matches video size for no upscaling
+	// Performance monitoring (F1 toggles graph overlay)
+	bool m_bShowPerfGraphs;
+	LARGE_INTEGER m_qpcFreq;              // QueryPerformanceCounter frequency
+	LARGE_INTEGER m_qpcFrameStart;        // QPC at start of render frame
+	volatile LONGLONG m_qpcFrameArrival;  // QPC when latest frame arrived in outputVideo
+	static const int PERF_HISTORY = 30;   // 30 seconds of history (1 sample/sec)
+	float m_perfFps[PERF_HISTORY];            // Source FPS history (avg per second)
+	float m_perfDisplayFps[PERF_HISTORY];    // Display FPS history (actual GPU uploads per second)
+	float m_perfFrameTime[PERF_HISTORY];     // Render frame time in ms (avg per second)
+	float m_perfLatency[PERF_HISTORY];       // Decode-to-display latency in ms (avg per second)
+	float m_perfBitrate[PERF_HISTORY];       // Bitrate in Mbps (per second)
+	float m_perfAudioQueue[PERF_HISTORY];    // Audio queue depth in frames (sampled per second)
+	int m_perfIdx;                           // Current write index in circular buffers
 
-	// High-quality video scaling with double-buffering (for fullscreen/resized windows)
-	SwsContext* m_swsCtx;          // FFmpeg scaler context
-	int m_scaledWidth;             // Current scaled output width
-	int m_scaledHeight;            // Current scaled output height
-	volatile LONG m_bScalerNeedsReinit;  // Flag to reinit scaler (thread-safe)
+	// 1-second accumulators for perf graph sampling
+	LARGE_INTEGER m_qpcPerfLastUpdate;    // QPC when last perf sample was written
+	float m_perfAccumFrameTime;           // Accumulated frame times this second
+	float m_perfAccumLatency;             // Accumulated latency this second
+	int m_perfAccumCount;                 // Number of frames accumulated this second
 
-	// Deferred scaler cleanup (to handle cross-thread freeing safely)
-	SwsContext* m_pendingFreeCtx;  // Context waiting to be freed (by callback thread)
-	uint8_t* m_pendingFreeYUV[2][3];  // Buffers waiting to be freed
+	// Double-buffered YUV420P planes for lockless producer-consumer pattern
+	// Callback thread copies raw YUV planes into write buffer
+	// Main thread uploads to GPU via SDL_UpdateYUVTexture (GPU does BT.709 conversion)
+	uint8_t* m_yuvBuffer[2][3];      // [buffer_index][plane] - two sets of Y, U, V planes
+	int m_yuvPitch[3];                // Pitches for each YUV plane (32-byte aligned)
+	volatile LONG m_yuvWriteIdx;      // Index of buffer being written by producer (0 or 1)
+	volatile LONG m_yuvReadIdx;       // Index of buffer ready for consumer (0 or 1)
+	volatile LONG m_yuvReady;         // Flag: 1 = new YUV frame available
 
-	// Double-buffered scaled YUV planes for lockless producer-consumer pattern
-	// Buffer 0 = front buffer (being displayed), Buffer 1 = back buffer (being written)
-	uint8_t* m_scaledYUV[2][3];    // [buffer_index][plane] - two sets of YUV planes
-	int m_scaledPitch[3];          // Scaled YUV pitches (same for both buffers)
-	volatile LONG m_writeBuffer;   // Index of buffer currently being written to (0 or 1)
-	volatile LONG m_readBuffer;    // Index of buffer ready for reading (0 or 1)
-	volatile LONG m_bufferReady;   // Flag: 1 = new frame ready in read buffer
-
-	// Source video buffer for scaling outside mutex
-	uint8_t* m_srcYUV[3];          // Source YUV planes (copy of incoming frame)
-	int m_srcPitch[3];             // Source pitches
-	int m_srcWidth;                // Source width
-	int m_srcHeight;               // Source height
-	volatile LONG m_srcReady;      // Flag: 1 = source data ready for scaling
-	HANDLE m_scalingThread;        // Background thread for scaling
-	HANDLE m_scalingEvent;         // Event to signal scaling thread
-	volatile LONG m_scalingThreadRunning;  // Flag to control thread lifetime
-	static DWORD WINAPI ScalingThreadProc(LPVOID param);  // Scaling thread function
-
-	void initScaler(int srcW, int srcH, int dstW, int dstH);
-	void freeScaler();
-	void freePendingScalerResources();  // Free deferred scaler resources (called from callback thread)
-
-	// YUV->RGB converter (legacy, no longer used - scaling thread outputs BGRA directly)
-	SwsContext* m_rgbConvertCtx;       // sws context (unused)
-	int m_rgbConvertWidth;             // Current converter input width
-	int m_rgbConvertHeight;            // Current converter input height
-	void initRGBConverter(int w, int h);
-	void freeRGBConverter();
+	// Frame pacing for smooth output (absorbs bursty TCP/WiFi delivery)
+	// Instead of displaying frames immediately on arrival (bursty), upload to GPU at fixed intervals
+	LARGE_INTEGER m_qpcLastNewFrame;    // QPC when last new frame was uploaded to GPU
+	double m_targetFrameIntervalMs;      // Target display interval (16.67ms=60fps, 33.33ms=30fps)
+	float m_displayFPS;                  // Actual display FPS (frames uploaded to GPU per second)
+	unsigned int m_displayFrameCount;    // Counter for display FPS calculation
+	DWORD m_displayFpsStartTime;         // Start time for display FPS calculation
+	DWORD m_connectionStartTime;         // GetTickCount when connection started (for uptime)
 };
-
