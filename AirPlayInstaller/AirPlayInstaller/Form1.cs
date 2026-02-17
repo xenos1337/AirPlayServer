@@ -39,7 +39,7 @@ namespace AirPlayInstaller
                 using (WebClient wc = new WebClient())
                 {
                     status.Text = "Fetching download URL..";
-                    cdn = await wc.DownloadStringTaskAsync("https://raw.githubusercontent.com/xenos1337/AirPlayServer/refs/heads/master/latest_release.md");
+                    cdn = await wc.DownloadStringTaskAsync("https://raw.githubusercontent.com/cledtz/AirPlayServer/refs/heads/master/latest_release.md");
 
                     if (string.IsNullOrEmpty(cdn))
                     {
