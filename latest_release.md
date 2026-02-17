@@ -1,1 +1,2 @@
-https://github.com/xenos1337/AirPlayServer/releases/download/v1.0.1/AirPlay2-Win-x64.zip
+https://github.com/cledtz/AirPlayServer/releases/download/1.2/AirPlayServer.zip
+
