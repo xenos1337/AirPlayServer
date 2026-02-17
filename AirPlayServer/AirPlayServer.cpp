@@ -79,6 +79,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         strcpy_s(hostName, sizeof(hostName), "AirPlay Server");
     }
 
+    // Check if Apple Bonjour Service is installed (required for mDNS discovery)
+    {
+        SC_HANDLE hSCM = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+        if (hSCM) {
+            SC_HANDLE hSvc = OpenServiceA(hSCM, "Bonjour Service", SERVICE_QUERY_STATUS);
+            if (!hSvc) {
+                CloseServiceHandle(hSCM);
+                MessageBoxA(NULL,
+                    "Apple Bonjour Service is not installed.\n\n"
+                    "AirPlay requires Bonjour for device discovery. "
+                    "Please install Bonjour Print Services from:\n"
+                    "https://support.apple.com/kb/DL999\n\n"
+                    "Alternatively, installing iTunes will also install Bonjour.",
+                    "AirPlay Server - Missing Dependency",
+                    MB_OK | MB_ICONWARNING);
+                WSACleanup();
+                return 1;
+            }
+            CloseServiceHandle(hSvc);
+            CloseServiceHandle(hSCM);
+        }
+    }
+
     CSDLPlayer player;
     g_pPlayer = &player;  // Set global pointer for cleanup handlers
     player.setServerName(hostName);
