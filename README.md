@@ -8,7 +8,7 @@ A high-performance AirPlay receiver for Windows with real-time video streaming a
 
 ### Quick Install (Recommended)
 
-1. **Download the installer**: [AirPlayInstaller.exe](https://github.com/xenos1337/AirPlayServer/raw/master/AirPlayInstaller/AirPlayInstaller.exe)
+1. **Download the installer**: [AirPlayInstaller.exe](https://github.com/cledtz/AirPlayServer/raw/refs/heads/master/AirPlayInstaller/AirPlayInstaller.exe)
 2. **Run as Administrator** — right-click the installer and select "Run as administrator"
 3. Click **Install** — the installer will download the latest release, extract it to `C:\Program Files\AirPlay`, and create Desktop and Start Menu shortcuts
 4. **Install [Bonjour for Windows](https://support.apple.com/kb/DL999)** if you don't have it already (required for device discovery). Installing iTunes also installs Bonjour.
