@@ -4,6 +4,7 @@
 
 CAirServer::CAirServer()
 	: m_pCallback(NULL)
+    , m_pPlayer(NULL)
     , m_pServer(NULL)
 {
     m_pCallback = new CAirServerCallback();
@@ -44,6 +45,7 @@ bool getHostName(char hostName[512])
 void CAirServer::start(CSDLPlayer* pPlayer, const char* serverName)
 {
     stop();
+    m_pPlayer = pPlayer;
     m_pCallback->setPlayer(pPlayer);
 	char hostName[512];
 	memset(hostName, 0, sizeof(hostName));
@@ -63,6 +65,13 @@ void CAirServer::stop()
     if (m_pServer != NULL) {
         fgServerStop(m_pServer);
         m_pServer = NULL;
+    }
+}
+
+void CAirServer::restart(const char* serverName)
+{
+    if (m_pPlayer != NULL) {
+        start(m_pPlayer, serverName);
     }
 }
 
