@@ -8,15 +8,10 @@ A high-performance AirPlay receiver for Windows with real-time video streaming a
 
 ### Quick Install (Recommended)
 
-1. **Download the installer**: [AirPlayInstaller.exe](https://github.com/cledtz/AirPlayServer/raw/refs/heads/master/AirPlayInstaller/AirPlayInstaller.exe)
-2. **Run as Administrator** — right-click the installer and select "Run as administrator"
-3. Click **Install** — the installer will download the latest release, extract it to `C:\Program Files\AirPlay`, and create Desktop and Start Menu shortcuts
-4. **Install [Bonjour for Windows](https://support.apple.com/kb/DL999)** if you don't have it already (required for device discovery). Installing iTunes also installs Bonjour.
-5. Launch **AirPlay** from the Desktop shortcut or Start Menu
-
-### Uninstalling
-
-Run the installer again and click **Uninstall**. This removes the program files and shortcuts.
+1. **Download the latest release**: [AirPlay2-Win-x64.zip](https://github.com/xenos1337/AirPlayServer/releases/latest)
+2. Extract the zip to a folder of your choice
+3. **Install [Bonjour for Windows](https://support.apple.com/kb/DL999)** if you don't have it already (required for device discovery). Installing iTunes also installs Bonjour.
+4. Run **AirPlayServer.exe** — the server will warn you at startup if Bonjour is missing or not running
 
 ### Prerequisites
 
@@ -99,8 +94,6 @@ AirPlayServer/
 │   └── lib/                 # RAOP, pairing, crypto, codecs
 ├── airplay2dll/             # AirPlay DLL wrapper + FFmpeg H.264 decode
 ├── dnssd/                   # mDNS/Bonjour service discovery DLL
-├── AirPlayInstaller/        # Installer application (C# WinForms)
-│   └── AirPlayInstaller.exe # Pre-built installer
 ├── external/                # Third-party libraries (SDL2, FFmpeg, ImGui)
 └── AirPlay.sln              # Visual Studio solution
 ```
