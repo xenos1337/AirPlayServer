@@ -84,12 +84,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         SC_HANDLE hSCM = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
         if (hSCM)
         {
+            // First try with start permission, fall back to query-only
+            // (SERVICE_START requires admin — don't let that look like "not installed")
+            bool bCanStart = true;
             SC_HANDLE hSvc = OpenServiceA(hSCM, "Bonjour Service",
                 SERVICE_QUERY_STATUS | SERVICE_START);
+            if (!hSvc)
+            {
+                bCanStart = false;
+                hSvc = OpenServiceA(hSCM, "Bonjour Service", SERVICE_QUERY_STATUS);
+            }
 
             if (!hSvc)
             {
-                // Not installed — ask user if they want to download it
+                // Truly not installed
                 CloseServiceHandle(hSCM);
                 int choice = MessageBoxA(NULL,
                     "Apple Bonjour is not installed.\n\n"
@@ -111,35 +119,51 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 if (ss.dwCurrentState == SERVICE_STOPPED ||
                     ss.dwCurrentState == SERVICE_PAUSED)
                 {
-                    // Try to start it
-                    if (!StartServiceA(hSvc, 0, NULL))
+                    if (bCanStart)
                     {
-                        DWORD err = GetLastError();
-                        if (err != ERROR_SERVICE_ALREADY_RUNNING)
+                        // Try to start it
+                        if (!StartServiceA(hSvc, 0, NULL))
                         {
-                            char msg[256];
-                            _snprintf_s(msg, sizeof(msg), _TRUNCATE,
-                                "Bonjour Service could not be started (error %lu).\n\n"
-                                "Try running as Administrator, or start the service manually via services.msc.",
-                                err);
-                            MessageBoxA(NULL, msg, "AirPlay Server - Bonjour Error",
-                                MB_OK | MB_ICONWARNING);
-                            CloseServiceHandle(hSvc);
-                            CloseServiceHandle(hSCM);
-                            WSACleanup();
-                            return 1;
+                            DWORD err = GetLastError();
+                            if (err != ERROR_SERVICE_ALREADY_RUNNING)
+                            {
+                                char msg[256];
+                                _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                                    "Bonjour Service could not be started (error %lu).\n\n"
+                                    "Try running as Administrator, or start the service manually via services.msc.",
+                                    err);
+                                MessageBoxA(NULL, msg, "AirPlay Server - Bonjour Error",
+                                    MB_OK | MB_ICONWARNING);
+                                CloseServiceHandle(hSvc);
+                                CloseServiceHandle(hSCM);
+                                WSACleanup();
+                                return 1;
+                            }
+                        }
+                        else
+                        {
+                            // Wait up to 5 seconds for it to reach SERVICE_RUNNING
+                            for (int i = 0; i < 50; i++)
+                            {
+                                Sleep(100);
+                                if (QueryServiceStatus(hSvc, &ss) &&
+                                    ss.dwCurrentState == SERVICE_RUNNING)
+                                    break;
+                            }
                         }
                     }
                     else
                     {
-                        // Wait up to 5 seconds for it to reach SERVICE_RUNNING
-                        for (int i = 0; i < 50; i++)
-                        {
-                            Sleep(100);
-                            if (QueryServiceStatus(hSvc, &ss) &&
-                                ss.dwCurrentState == SERVICE_RUNNING)
-                                break;
-                        }
+                        // No permission to start — ask user to do it manually
+                        MessageBoxA(NULL,
+                            "Bonjour Service is installed but not running.\n\n"
+                            "Try running as Administrator, or start the service manually via services.msc.",
+                            "AirPlay Server - Bonjour Stopped",
+                            MB_OK | MB_ICONWARNING);
+                        CloseServiceHandle(hSvc);
+                        CloseServiceHandle(hSCM);
+                        WSACleanup();
+                        return 1;
                     }
                 }
             }
