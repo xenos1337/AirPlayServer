@@ -21,6 +21,10 @@ Output: `x64\Debug\AirPlayServer.exe`
 
 **Startup Project**: AirPlayServer (set via right-click → "Set as Startup Project")
 
+## Coding Rules
+
+- When replacing or superseding code/files, always delete the old unused code/files. Never leave dead code or replaced files behind.
+
 **Build dependency chain**: AirPlayLib (static lib) → airplay2dll (DLL) → AirPlayServer (exe). dnssd builds independently.
 
 ### Runtime DLLs Required

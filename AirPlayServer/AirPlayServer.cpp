@@ -79,24 +79,71 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         strcpy_s(hostName, sizeof(hostName), "AirPlay Server");
     }
 
-    // Check if Apple Bonjour Service is installed (required for mDNS discovery)
+    // Check Bonjour Service (required for mDNS device discovery)
     {
         SC_HANDLE hSCM = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
-        if (hSCM) {
-            SC_HANDLE hSvc = OpenServiceA(hSCM, "Bonjour Service", SERVICE_QUERY_STATUS);
-            if (!hSvc) {
+        if (hSCM)
+        {
+            SC_HANDLE hSvc = OpenServiceA(hSCM, "Bonjour Service",
+                SERVICE_QUERY_STATUS | SERVICE_START);
+
+            if (!hSvc)
+            {
+                // Not installed — ask user if they want to download it
                 CloseServiceHandle(hSCM);
-                MessageBoxA(NULL,
-                    "Apple Bonjour Service is not installed.\n\n"
-                    "AirPlay requires Bonjour for device discovery. "
-                    "Please install Bonjour Print Services from:\n"
-                    "https://support.apple.com/kb/DL999\n\n"
-                    "Alternatively, installing iTunes will also install Bonjour.",
-                    "AirPlay Server - Missing Dependency",
-                    MB_OK | MB_ICONWARNING);
+                int choice = MessageBoxA(NULL,
+                    "Apple Bonjour is not installed.\n\n"
+                    "Bonjour is required for AirPlay device discovery.\n\n"
+                    "Click OK to open the Bonjour download page, or Cancel to exit.",
+                    "AirPlay Server - Bonjour Not Found",
+                    MB_OKCANCEL | MB_ICONWARNING);
+                if (choice == IDOK)
+                    ShellExecuteA(NULL, "open", "https://support.apple.com/kb/DL999",
+                        NULL, NULL, SW_SHOWNORMAL);
                 WSACleanup();
                 return 1;
             }
+
+            // Service exists — check its state
+            SERVICE_STATUS ss = {};
+            if (QueryServiceStatus(hSvc, &ss))
+            {
+                if (ss.dwCurrentState == SERVICE_STOPPED ||
+                    ss.dwCurrentState == SERVICE_PAUSED)
+                {
+                    // Try to start it
+                    if (!StartServiceA(hSvc, 0, NULL))
+                    {
+                        DWORD err = GetLastError();
+                        if (err != ERROR_SERVICE_ALREADY_RUNNING)
+                        {
+                            char msg[256];
+                            _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                                "Bonjour Service could not be started (error %lu).\n\n"
+                                "Try running as Administrator, or start the service manually via services.msc.",
+                                err);
+                            MessageBoxA(NULL, msg, "AirPlay Server - Bonjour Error",
+                                MB_OK | MB_ICONWARNING);
+                            CloseServiceHandle(hSvc);
+                            CloseServiceHandle(hSCM);
+                            WSACleanup();
+                            return 1;
+                        }
+                    }
+                    else
+                    {
+                        // Wait up to 5 seconds for it to reach SERVICE_RUNNING
+                        for (int i = 0; i < 50; i++)
+                        {
+                            Sleep(100);
+                            if (QueryServiceStatus(hSvc, &ss) &&
+                                ss.dwCurrentState == SERVICE_RUNNING)
+                                break;
+                        }
+                    }
+                }
+            }
+
             CloseServiceHandle(hSvc);
             CloseServiceHandle(hSCM);
         }
