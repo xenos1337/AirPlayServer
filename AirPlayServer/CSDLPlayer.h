@@ -62,6 +62,7 @@ public:
 	SDL_Renderer* m_renderer;
 	SDL_Texture* m_videoTexture;   // IYUV streaming texture (GPU does BT.709 colorspace + scaling)
 	SDL_Rect m_displayRect;      // Where to display the video (centered with letterbox)
+	int m_rotationAngle;         // Video rotation in degrees (0, 90, 180, 270)
 
 	// Video source dimensions (from AirPlay stream)
 	int m_videoWidth;

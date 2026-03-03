@@ -88,6 +88,7 @@ CSDLPlayer::CSDLPlayer()
 	, m_filePerfLog(NULL)
 	, m_sAudioFmt()
 	, m_displayRect()
+	, m_rotationAngle(0)
 	, m_videoWidth(0)
 	, m_videoHeight(0)
 	, m_lastFramePTS(0)
@@ -299,7 +300,8 @@ void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 			printf("Performance log saved to airplay_perf.csv\n");
 		}
 
-		// Reset statistics and perf graphs on disconnect
+		// Reset rotation and statistics on disconnect
+		m_rotationAngle = 0;
 		m_totalFrames = 0;
 		m_droppedFrames = 0;
 		m_fpsStartTime = 0;
@@ -397,9 +399,15 @@ void CSDLPlayer::loopEvents()
 	SDL_Event event;
 
 	BOOL bEndLoop = FALSE;
-	bool bShowUI = true;
+	bool bShowUI = m_imgui.IsOverlayVisible();
 
 	EQualityPreset lastQualityPreset = (EQualityPreset)-1;  // Force initial preset application
+
+	// Device name change debounce (restart server 1.5s after user stops typing)
+	char lastDeviceName[256] = { 0 };
+	strncpy_s(lastDeviceName, sizeof(lastDeviceName), m_serverName, _TRUNCATE);
+	DWORD nameChangeTime = 0;
+	bool namePendingRestart = false;
 
 	// Initialize cursor hide timer
 	m_lastMouseMoveTime = GetTickCount();
@@ -571,6 +579,12 @@ void CSDLPlayer::loopEvents()
 					m_bShowPerfGraphs = !m_bShowPerfGraphs;
 					break;
 				}
+				case SDLK_r: {
+					// R rotates video 90 degrees clockwise
+					m_rotationAngle = (m_rotationAngle + 90) % 360;
+					calculateDisplayRect();
+					break;
+				}
 				}
 				break;
 			}
@@ -611,6 +625,26 @@ void CSDLPlayer::loopEvents()
 			DWORD elapsed = GetTickCount() - m_dwDisconnectStartTime;
 			if (elapsed >= 300) {
 				m_bDisconnecting = false;
+			}
+		}
+
+		// Check if device name changed (debounced restart)
+		{
+			const char* currentName = m_imgui.GetDeviceName();
+			const char* checkName = (currentName && strlen(currentName) > 0) ? currentName : m_serverName;
+			if (strcmp(checkName, lastDeviceName) != 0) {
+				// Name changed — start/reset debounce timer
+				strncpy_s(lastDeviceName, sizeof(lastDeviceName), checkName, _TRUNCATE);
+				nameChangeTime = GetTickCount();
+				namePendingRestart = true;
+			}
+			if (namePendingRestart && (GetTickCount() - nameChangeTime) >= 1500) {
+				// 1.5s since last change — restart server with new name
+				namePendingRestart = false;
+				if (!m_bConnected) {
+					setServerName(lastDeviceName);
+					m_server.restart(m_serverName);
+				}
 			}
 		}
 
@@ -698,7 +732,8 @@ void CSDLPlayer::loopEvents()
 		// 3. Render video texture (GPU handles scaling)
 		// Only render when connected or during disconnect transition (prevents stale frame behind home screen)
 		if (m_videoTexture != NULL && m_videoWidth > 0 && (m_bConnected || m_bDisconnecting)) {
-			SDL_RenderCopy(m_renderer, m_videoTexture, NULL, &m_displayRect);
+			SDL_RenderCopyEx(m_renderer, m_videoTexture, NULL, &m_displayRect,
+				(double)m_rotationAngle, NULL, SDL_FLIP_NONE);
 		}
 
 		// 4. Render ImGui overlay on top
@@ -708,6 +743,7 @@ void CSDLPlayer::loopEvents()
 			m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName,
 				m_videoWidth, m_videoHeight, m_displayFPS, m_currentBitrateMbps,
 				m_totalFrames, m_droppedFrames, m_totalBytes);
+			m_imgui.SetOverlayVisible(bShowUI);  // Sync for settings persistence
 		} else if (m_bDisconnecting) {
 			// Disconnecting - show disconnect message
 			m_imgui.RenderDisconnectMessage(m_connectedDeviceName);
@@ -908,7 +944,17 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		m_evtVideoSizeChange.user.data1 = (void*)(uintptr_t)data->width;
 		m_evtVideoSizeChange.user.data2 = (void*)(uintptr_t)data->height;
 		SDL_PushEvent(&m_evtVideoSizeChange);
-		return;
+
+		// Wait for main thread to complete the resize so we can use this frame
+		// instead of dropping it (prevents black screen during resolution changes)
+		DWORD waitStart = GetTickCount();
+		while (m_bResizing || (int)data->width != m_videoWidth || (int)data->height != m_videoHeight) {
+			Sleep(1);
+			if (GetTickCount() - waitStart > 500) {
+				return;  // Timeout - give up on this frame
+			}
+		}
+		// Fall through to copy this frame into the newly allocated buffers
 	}
 
 	// CALLBACK THREAD: Copy raw YUV420P planes into double buffer (fast memcpy)
@@ -1230,9 +1276,14 @@ void CSDLPlayer::calculateDisplayRect()
 		return;
 	}
 
+	// For 90/270 rotation, the effective video dimensions are swapped
+	bool rotated = (m_rotationAngle == 90 || m_rotationAngle == 270);
+	int effectiveW = rotated ? m_videoHeight : m_videoWidth;
+	int effectiveH = rotated ? m_videoWidth : m_videoHeight;
+
 	// Use cross-multiplication to compare aspect ratios without float rounding
-	long long videoCross = (long long)m_videoWidth * m_windowHeight;
-	long long windowCross = (long long)m_windowWidth * m_videoHeight;
+	long long videoCross = (long long)effectiveW * m_windowHeight;
+	long long windowCross = (long long)m_windowWidth * effectiveH;
 
 	// If the aspect ratios are very close (within 1%), just fill the entire window
 	long long diff = videoCross - windowCross;
@@ -1251,18 +1302,28 @@ void CSDLPlayer::calculateDisplayRect()
 	if (videoCross > windowCross) {
 		// Video is wider than window - fit to width (letterbox top/bottom)
 		displayWidth = m_windowWidth;
-		displayHeight = (int)(((long long)m_windowWidth * m_videoHeight + m_videoWidth / 2) / m_videoWidth);
+		displayHeight = (int)(((long long)m_windowWidth * effectiveH + effectiveW / 2) / effectiveW);
 	} else {
 		// Video is taller than window - fit to height (pillarbox left/right)
 		displayHeight = m_windowHeight;
-		displayWidth = (int)(((long long)m_windowHeight * m_videoWidth + m_videoHeight / 2) / m_videoHeight);
+		displayWidth = (int)(((long long)m_windowHeight * effectiveW + effectiveH / 2) / effectiveH);
 	}
 
 	// Center the display rect
-	m_displayRect.x = (m_windowWidth - displayWidth) / 2;
-	m_displayRect.y = (m_windowHeight - displayHeight) / 2;
-	m_displayRect.w = displayWidth;
-	m_displayRect.h = displayHeight;
+	// SDL_RenderCopyEx rotates around the center of the dest rect, so the rect
+	// must be sized for the *rotated* output but SDL needs the *unrotated* rect.
+	// For 90/270, we need to swap the rect dimensions so the rotated result fits.
+	if (rotated) {
+		m_displayRect.x = (m_windowWidth - displayHeight) / 2;
+		m_displayRect.y = (m_windowHeight - displayWidth) / 2;
+		m_displayRect.w = displayHeight;
+		m_displayRect.h = displayWidth;
+	} else {
+		m_displayRect.x = (m_windowWidth - displayWidth) / 2;
+		m_displayRect.y = (m_windowHeight - displayHeight) / 2;
+		m_displayRect.w = displayWidth;
+		m_displayRect.h = displayHeight;
+	}
 }
 
 void CSDLPlayer::unInitVideo()
