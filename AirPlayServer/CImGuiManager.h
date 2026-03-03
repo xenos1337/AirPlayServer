@@ -78,6 +78,10 @@ public:
 	// Get quality preset
 	EQualityPreset GetQualityPreset() const { return m_qualityPreset; }
 
+	// Overlay visibility (persisted in settings)
+	bool IsOverlayVisible() const { return m_bShowUI; }
+	void SetOverlayVisible(bool visible) { m_bShowUI = visible; }
+
 	// Audio controls
 	bool IsAutoAdjustEnabled() const { return m_bAutoAdjust; }
 	void SetDeviceVolume(float volume) { m_deviceVolume = volume; }  // From AirPlay device (0.0-1.0)
@@ -102,8 +106,7 @@ private:
 
 	// Quality preset
 	EQualityPreset m_qualityPreset;
-	bool m_bNeedSyncTabs;  // Flag to sync tab selection once when switching views
-	bool m_bLastWasOverlay;  // Track if last rendered was overlay (true) or home (false)
+	bool m_bNeedSyncTabs;  // One-shot flag to sync tab selection on first overlay render
 
 	// Audio controls
 	float m_deviceVolume;        // Volume from AirPlay device (0.0 to 1.0)
