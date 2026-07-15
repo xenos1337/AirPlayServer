@@ -42,23 +42,20 @@ function New-IconFrame {
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
         [float]$r = $renderSize
-        # A generous squircle silhouette reads more like a current Windows 11
-        # app icon than the old near-square tile, especially on the taskbar.
+        # Use a nearly fully rounded squircle and flat color so the silhouette
+        # remains simple and recognizable at small Windows taskbar sizes.
         [float]$margin = $r * 0.070
         $tileRect = [System.Drawing.RectangleF]::new(
             $margin,
             $margin,
             $r - 2.0 * $margin,
             $r - 2.0 * $margin)
-        $tilePath = New-RoundedRectanglePath $tileRect ($r * 0.285)
-        $tileBrush = [System.Drawing.Drawing2D.LinearGradientBrush]::new(
-            $tileRect,
-            [System.Drawing.Color]::FromArgb(255, 25, 54, 82),
-            [System.Drawing.Color]::FromArgb(255, 9, 19, 31),
-            55.0)
+        $tilePath = New-RoundedRectanglePath $tileRect ($r * 0.395)
+        $tileColor = [System.Drawing.Color]::FromArgb(255, 30, 103, 170)
+        $tileBrush = [System.Drawing.SolidBrush]::new($tileColor)
         $tileBorder = [System.Drawing.Pen]::new(
-            [System.Drawing.Color]::FromArgb(255, 62, 112, 158),
-            [Math]::Max(1.0, $r * 0.014))
+            [System.Drawing.Color]::FromArgb(255, 72, 145, 207),
+            [Math]::Max(1.0, $r * 0.012))
 
         try {
             $graphics.FillPath($tileBrush, $tilePath)
@@ -70,7 +67,7 @@ function New-IconFrame {
             $tilePath.Dispose()
         }
 
-        $accent = [System.Drawing.Color]::FromArgb(255, 105, 178, 239)
+        $accent = [System.Drawing.Color]::FromArgb(255, 239, 248, 255)
         $screenRect = [System.Drawing.RectangleF]::new(
             $r * 0.205,
             $r * 0.235,
@@ -88,9 +85,8 @@ function New-IconFrame {
             $screenPath.Dispose()
         }
 
-        # Match the lower tile color so the AirPlay cutout stays seamless over
-        # the gradient while preserving the familiar receiver silhouette.
-        $tileColor = [System.Drawing.Color]::FromArgb(255, 12, 27, 43)
+        # Match the flat tile exactly so the AirPlay cutout has no shadow or
+        # gradient seam around the receiver triangle.
         [System.Drawing.PointF[]]$cutout = @(
             [System.Drawing.PointF]::new($r * 0.500, $r * 0.410),
             [System.Drawing.PointF]::new($r * 0.750, $r * 0.795),
