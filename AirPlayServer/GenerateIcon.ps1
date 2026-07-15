@@ -42,20 +42,18 @@ function New-IconFrame {
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
         [float]$r = $renderSize
-        # Use a nearly fully rounded squircle and flat color so the silhouette
-        # remains simple and recognizable at small Windows taskbar sizes.
-        [float]$margin = $r * 0.070
+        [float]$margin = $r * 0.055
         $tileRect = [System.Drawing.RectangleF]::new(
             $margin,
             $margin,
             $r - 2.0 * $margin,
             $r - 2.0 * $margin)
-        $tilePath = New-RoundedRectanglePath $tileRect ($r * 0.395)
-        $tileColor = [System.Drawing.Color]::FromArgb(255, 30, 103, 170)
-        $tileBrush = [System.Drawing.SolidBrush]::new($tileColor)
+        $tilePath = New-RoundedRectanglePath $tileRect ($r * 0.205)
+        $tileBrush = [System.Drawing.SolidBrush]::new(
+            [System.Drawing.Color]::FromArgb(255, 16, 26, 38))
         $tileBorder = [System.Drawing.Pen]::new(
-            [System.Drawing.Color]::FromArgb(255, 72, 145, 207),
-            [Math]::Max(1.0, $r * 0.012))
+            [System.Drawing.Color]::FromArgb(255, 43, 73, 103),
+            [Math]::Max(1.0, $r * 0.018))
 
         try {
             $graphics.FillPath($tileBrush, $tilePath)
@@ -67,14 +65,14 @@ function New-IconFrame {
             $tilePath.Dispose()
         }
 
-        $accent = [System.Drawing.Color]::FromArgb(255, 239, 248, 255)
+        $accent = [System.Drawing.Color]::FromArgb(255, 87, 145, 204)
         $screenRect = [System.Drawing.RectangleF]::new(
-            $r * 0.205,
-            $r * 0.235,
-            $r * 0.590,
-            $r * 0.365)
-        $screenPath = New-RoundedRectanglePath $screenRect ($r * 0.085)
-        $screenPen = [System.Drawing.Pen]::new($accent, [Math]::Max(2.0, $r * 0.052))
+            $r * 0.220,
+            $r * 0.245,
+            $r * 0.560,
+            $r * 0.355)
+        $screenPath = New-RoundedRectanglePath $screenRect ($r * 0.065)
+        $screenPen = [System.Drawing.Pen]::new($accent, [Math]::Max(2.0, $r * 0.055))
         $screenPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
 
         try {
@@ -85,17 +83,16 @@ function New-IconFrame {
             $screenPath.Dispose()
         }
 
-        # Match the flat tile exactly so the AirPlay cutout has no shadow or
-        # gradient seam around the receiver triangle.
+        $tileColor = [System.Drawing.Color]::FromArgb(255, 16, 26, 38)
         [System.Drawing.PointF[]]$cutout = @(
             [System.Drawing.PointF]::new($r * 0.500, $r * 0.410),
-            [System.Drawing.PointF]::new($r * 0.750, $r * 0.795),
-            [System.Drawing.PointF]::new($r * 0.250, $r * 0.795)
+            [System.Drawing.PointF]::new($r * 0.755, $r * 0.800),
+            [System.Drawing.PointF]::new($r * 0.245, $r * 0.800)
         )
         [System.Drawing.PointF[]]$receiver = @(
             [System.Drawing.PointF]::new($r * 0.500, $r * 0.455),
-            [System.Drawing.PointF]::new($r * 0.695, $r * 0.750),
-            [System.Drawing.PointF]::new($r * 0.305, $r * 0.750)
+            [System.Drawing.PointF]::new($r * 0.700, $r * 0.755),
+            [System.Drawing.PointF]::new($r * 0.300, $r * 0.755)
         )
         $cutoutBrush = [System.Drawing.SolidBrush]::new($tileColor)
         $accentBrush = [System.Drawing.SolidBrush]::new($accent)
