@@ -441,6 +441,10 @@ bool CImGuiManager::Init(SDL_Window* window, SDL_Renderer* renderer)
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+	// All application windows are positioned explicitly and real preferences
+	// live in airplay_settings.ini. Disable Dear ImGui's transient layout cache
+	// so imgui.ini is neither required nor recreated beside the executable.
+	io.IniFilename = NULL;
 
 	// Configure font atlas for better quality
 	io.Fonts->TexGlyphPadding = 1;  // Padding between glyphs for crisp rendering
