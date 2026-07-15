@@ -55,7 +55,7 @@ On the disconnected home screen, enable **Require PIN**. The receiver generates 
 
 The connected-session controls also include **Hide from captures**. Capture privacy keeps the receiver fully visible and usable on your own monitor, excludes its main window from supported Windows recording and screen-sharing APIs, and makes the clean-feed output solid black. Select **Show in captures** or press **Ctrl+Shift+H** to disable it.
 
-Select **Picture in picture** or press **P** while connected to move the receiver into a compact, resizable, always-on-top window at the lower-right of the current monitor. PiP preserves the video aspect ratio and your normal window position, size, and maximized state. Use **Exit PiP** or press **P** again to restore the normal receiver. Disconnecting also exits PiP automatically.
+Select **Picture in picture** or press **P** while connected to move the receiver into a compact, borderless, always-on-top window at the lower-right of the current monitor. PiP locks resizing to the current device orientation and preserves your normal window position, size, and maximized state. Move the pointer over PiP to reveal its close **X**, or press **P** again to restore the normal receiver. Drag the invisible top strip to reposition it; disconnecting also exits PiP automatically.
 
 ### Screen Cast / OBS clean feed
 

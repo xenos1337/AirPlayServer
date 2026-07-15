@@ -317,8 +317,11 @@ void CImGuiManager::ApplyWindowMinimumSize()
 	// PiP only needs room for the video and compact exit control. Normal mode
 	// retains the full workspace required by settings and session controls.
 	if (m_pWindow != NULL) {
-		float baseWidth = m_pictureInPictureMode ? 240.0f : 560.0f;
-		float baseHeight = m_pictureInPictureMode ? 135.0f : 420.0f;
+		// CSDLPlayer applies a source-aspect-aware minimum while PiP is active.
+		// Avoid an independent width/height floor here because that would force
+		// portrait devices into a wider window with black side bars.
+		float baseWidth = m_pictureInPictureMode ? 1.0f : 560.0f;
+		float baseHeight = m_pictureInPictureMode ? 1.0f : 420.0f;
 		int minimumWidth = (int)(baseWidth * m_dpiScale + 0.5f);
 		int minimumHeight = (int)(baseHeight * m_dpiScale + 0.5f);
 		int borderTop = 0;
@@ -1187,27 +1190,31 @@ void CImGuiManager::RenderPictureInPictureControls(bool* pExitPictureInPicture)
 
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiIO& io = ImGui::GetIO();
+	bool pointerInside = io.MousePos.x >= 0.0f && io.MousePos.y >= 0.0f &&
+		io.MousePos.x < io.DisplaySize.x && io.MousePos.y < io.DisplaySize.y;
+	if (!pointerInside) {
+		return;
+	}
 	float scale = m_dpiScale;
-	float margin = 10.0f * scale;
-	ImVec2 controlSize(94.0f * scale, 34.0f * scale);
+	float margin = 7.0f * scale;
+	float closeSize = 30.0f * scale;
+	ImVec2 controlSize(closeSize, closeSize);
 	ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - margin, margin),
 		ImGuiCond_Always, ImVec2(1.0f, 0.0f));
 	ImGui::SetNextWindowSize(controlSize, ImGuiCond_Always);
-	ImGui::SetNextWindowBgAlpha(0.86f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f * scale);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 	ImGui::Begin("##PictureInPictureControls", NULL,
 		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
 		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-		ImGuiWindowFlags_NoSavedSettings);
-	if (ImGui::Button("Exit PiP##ExitPictureInPicture", controlSize) &&
+		ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+	if (DrawCloseButton("##ExitPictureInPicture", closeSize, scale) &&
 		pExitPictureInPicture != NULL) {
 		*pExitPictureInPicture = true;
 	}
 	ShowTooltip("Restore the normal receiver window (P)");
 	ImGui::End();
-	ImGui::PopStyleVar(3);
+	ImGui::PopStyleVar(2);
 }
 
 // Helper: draw a quiet sparkline using ImDrawList.

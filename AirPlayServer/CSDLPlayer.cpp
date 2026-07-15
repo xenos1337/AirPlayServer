@@ -31,6 +31,7 @@ namespace {
 	constexpr int MIN_WINDOW_WIDTH = 560;
 	constexpr int MIN_WINDOW_HEIGHT = 420;
 	constexpr int PIP_LONG_EDGE = 420;
+	constexpr int PIP_MIN_LONG_EDGE = 240;
 	constexpr int PIP_EDGE_MARGIN = 24;
 	constexpr DWORD NATIVE_RESIZE_FRAME_INTERVAL_MS = 16;
 	constexpr UINT_PTR NATIVE_RESIZE_TIMER_ID = 0x41525052;
@@ -101,6 +102,13 @@ namespace {
 			NATIVE_RESIZE_PLAYER_PROPERTY);
 		if (player == NULL || player->m_originalWindowProc == NULL) {
 			return DefWindowProcW(window, message, wParam, lParam);
+		}
+		if (player->m_bPictureInPicture && message == WM_NCHITTEST) {
+			return player->pictureInPictureHitTest(window, lParam);
+		}
+		if (player->m_bPictureInPicture && message == WM_SIZING) {
+			player->constrainPictureInPictureRect(wParam, (RECT*)lParam);
+			return TRUE;
 		}
 
 		if (message == WM_ENTERSIZEMOVE) {
@@ -999,6 +1007,8 @@ void CSDLPlayer::loopEvents()
 						if (!m_bFullscreen && !m_bPictureInPicture &&
 							!m_imgui.IsScreenCastEnabled()) {
 							resizeWindowForVideo((int)width, (int)height);
+						} else if (m_bPictureInPicture) {
+							resizePictureInPictureToAspect();
 						}
 
 						// Calculate display rect for the new video
@@ -1136,7 +1146,8 @@ void CSDLPlayer::loopEvents()
 					// R rotates video 90 degrees clockwise
 					if (!hasCommandModifier) {
 						m_rotationAngle = (m_rotationAngle + 90) % 360;
-						calculateDisplayRect();
+						if (m_bPictureInPicture) resizePictureInPictureToAspect();
+						else calculateDisplayRect();
 					}
 					break;
 				}
@@ -2283,6 +2294,146 @@ void CSDLPlayer::setCapturePrivacyMode(bool enabled)
 	m_imgui.ShowOverlay();
 }
 
+double CSDLPlayer::pictureInPictureAspectRatio() const
+{
+	int width = m_videoWidth > 0 ? m_videoWidth : 16;
+	int height = m_videoHeight > 0 ? m_videoHeight : 9;
+	if (m_rotationAngle == 90 || m_rotationAngle == 270) {
+		int swap = width;
+		width = height;
+		height = swap;
+	}
+	return height > 0 ? (double)width / (double)height : 16.0 / 9.0;
+}
+
+void CSDLPlayer::constrainPictureInPictureRect(WPARAM sizingEdge, RECT* windowRect) const
+{
+	if (!m_bPictureInPicture || windowRect == NULL) {
+		return;
+	}
+
+	double aspect = pictureInPictureAspectRatio();
+	if (aspect <= 0.0) {
+		return;
+	}
+	int width = windowRect->right - windowRect->left;
+	int height = windowRect->bottom - windowRect->top;
+	if (width <= 0 || height <= 0) {
+		return;
+	}
+
+	bool leftEdge = sizingEdge == WMSZ_LEFT || sizingEdge == WMSZ_TOPLEFT ||
+		sizingEdge == WMSZ_BOTTOMLEFT;
+	bool rightEdge = sizingEdge == WMSZ_RIGHT || sizingEdge == WMSZ_TOPRIGHT ||
+		sizingEdge == WMSZ_BOTTOMRIGHT;
+	bool topEdge = sizingEdge == WMSZ_TOP || sizingEdge == WMSZ_TOPLEFT ||
+		sizingEdge == WMSZ_TOPRIGHT;
+	bool bottomEdge = sizingEdge == WMSZ_BOTTOM || sizingEdge == WMSZ_BOTTOMLEFT ||
+		sizingEdge == WMSZ_BOTTOMRIGHT;
+	bool corner = (leftEdge || rightEdge) && (topEdge || bottomEdge);
+
+	int widthFromHeight = (int)((double)height * aspect + 0.5);
+	int heightFromWidth = (int)((double)width / aspect + 0.5);
+	bool driveFromWidth = !topEdge && !bottomEdge;
+	if (corner) {
+		driveFromWidth = abs(heightFromWidth - height) <= abs(widthFromHeight - width);
+	}
+	int adjustedWidth = driveFromWidth ? width : widthFromHeight;
+	int adjustedHeight = driveFromWidth ? heightFromWidth : height;
+	int minimumWidth = aspect >= 1.0
+		? PIP_MIN_LONG_EDGE : (int)((double)PIP_MIN_LONG_EDGE * aspect + 0.5);
+	int minimumHeight = aspect >= 1.0
+		? (int)((double)PIP_MIN_LONG_EDGE / aspect + 0.5) : PIP_MIN_LONG_EDGE;
+	if (adjustedWidth < minimumWidth || adjustedHeight < minimumHeight) {
+		adjustedWidth = minimumWidth;
+		adjustedHeight = minimumHeight;
+	}
+
+	if (leftEdge) windowRect->left = windowRect->right - adjustedWidth;
+	else if (rightEdge) windowRect->right = windowRect->left + adjustedWidth;
+	else {
+		int centerX = (windowRect->left + windowRect->right) / 2;
+		windowRect->left = centerX - adjustedWidth / 2;
+		windowRect->right = windowRect->left + adjustedWidth;
+	}
+	if (topEdge) windowRect->top = windowRect->bottom - adjustedHeight;
+	else if (bottomEdge) windowRect->bottom = windowRect->top + adjustedHeight;
+	else {
+		int centerY = (windowRect->top + windowRect->bottom) / 2;
+		windowRect->top = centerY - adjustedHeight / 2;
+		windowRect->bottom = windowRect->top + adjustedHeight;
+	}
+}
+
+LRESULT CSDLPlayer::pictureInPictureHitTest(HWND window, LPARAM position) const
+{
+	RECT bounds = {};
+	if (!m_bPictureInPicture || !GetWindowRect(window, &bounds)) {
+		return HTCLIENT;
+	}
+	int x = (int)(short)LOWORD(position) - bounds.left;
+	int y = (int)(short)HIWORD(position) - bounds.top;
+	int width = bounds.right - bounds.left;
+	int height = bounds.bottom - bounds.top;
+	int resizeGrip = GetSystemMetrics(SM_CXSIZEFRAME);
+	if (resizeGrip < 7) resizeGrip = 7;
+
+	bool left = x >= 0 && x < resizeGrip;
+	bool right = x < width && x >= width - resizeGrip;
+	bool top = y >= 0 && y < resizeGrip;
+	bool bottom = y < height && y >= height - resizeGrip;
+	if (top && left) return HTTOPLEFT;
+	if (top && right) return HTTOPRIGHT;
+	if (bottom && left) return HTBOTTOMLEFT;
+	if (bottom && right) return HTBOTTOMRIGHT;
+	if (left) return HTLEFT;
+	if (right) return HTRIGHT;
+	if (top) return HTTOP;
+	if (bottom) return HTBOTTOM;
+
+	// Keep the hover-only close button interactive. The rest of the invisible
+	// top strip acts as a caption so the frameless PiP remains draggable.
+	if (y >= resizeGrip && y < 42 && x < width - 48) {
+		return HTCAPTION;
+	}
+	return HTCLIENT;
+}
+
+void CSDLPlayer::resizePictureInPictureToAspect()
+{
+	if (!m_bPictureInPicture || m_window == NULL) {
+		return;
+	}
+	double aspect = pictureInPictureAspectRatio();
+	int minimumWidth = aspect >= 1.0
+		? PIP_MIN_LONG_EDGE : (int)((double)PIP_MIN_LONG_EDGE * aspect + 0.5);
+	int minimumHeight = aspect >= 1.0
+		? (int)((double)PIP_MIN_LONG_EDGE / aspect + 0.5) : PIP_MIN_LONG_EDGE;
+	SDL_SetWindowMinimumSize(m_window, minimumWidth, minimumHeight);
+	int oldWidth = 0;
+	int oldHeight = 0;
+	int oldX = 0;
+	int oldY = 0;
+	SDL_GetWindowSize(m_window, &oldWidth, &oldHeight);
+	SDL_GetWindowPosition(m_window, &oldX, &oldY);
+	int longEdge = oldWidth > oldHeight ? oldWidth : oldHeight;
+	if (longEdge < PIP_MIN_LONG_EDGE) longEdge = PIP_MIN_LONG_EDGE;
+	int targetWidth = longEdge;
+	int targetHeight = (int)((double)targetWidth / aspect + 0.5);
+	if (aspect < 1.0) {
+		targetHeight = longEdge;
+		targetWidth = (int)((double)targetHeight * aspect + 0.5);
+	}
+	SDL_SetWindowSize(m_window, targetWidth, targetHeight);
+	SDL_GetWindowSize(m_window, &targetWidth, &targetHeight);
+	SDL_SetWindowPosition(m_window,
+		oldX + (oldWidth - targetWidth) / 2,
+		oldY + (oldHeight - targetHeight) / 2);
+	m_windowWidth = targetWidth;
+	m_windowHeight = targetHeight;
+	calculateDisplayRect();
+}
+
 void CSDLPlayer::setPictureInPictureMode(bool enabled)
 {
 	if (m_window == NULL || m_bPictureInPicture == enabled ||
@@ -2314,25 +2465,24 @@ void CSDLPlayer::setPictureInPictureMode(bool enabled)
 		if (m_pipRestoreW < 1) m_pipRestoreW = MIN_WINDOW_WIDTH;
 		if (m_pipRestoreH < 1) m_pipRestoreH = MIN_WINDOW_HEIGHT;
 
-		int sourceWidth = m_videoWidth > 0 ? m_videoWidth : 16;
-		int sourceHeight = m_videoHeight > 0 ? m_videoHeight : 9;
-		if (m_rotationAngle == 90 || m_rotationAngle == 270) {
-			int swap = sourceWidth;
-			sourceWidth = sourceHeight;
-			sourceHeight = swap;
-		}
+		double aspect = pictureInPictureAspectRatio();
 		int targetWidth = PIP_LONG_EDGE;
-		int targetHeight = (int)((long long)targetWidth * sourceHeight / sourceWidth);
-		if (sourceHeight > sourceWidth) {
+		int targetHeight = (int)((double)targetWidth / aspect + 0.5);
+		if (aspect < 1.0) {
 			targetHeight = PIP_LONG_EDGE;
-			targetWidth = (int)((long long)targetHeight * sourceWidth / sourceHeight);
+			targetWidth = (int)((double)targetHeight * aspect + 0.5);
 		}
-		if (targetWidth < 240) targetWidth = 240;
-		if (targetHeight < 135) targetHeight = 135;
+		int minimumWidth = aspect >= 1.0
+			? PIP_MIN_LONG_EDGE : (int)((double)PIP_MIN_LONG_EDGE * aspect + 0.5);
+		int minimumHeight = aspect >= 1.0
+			? (int)((double)PIP_MIN_LONG_EDGE / aspect + 0.5) : PIP_MIN_LONG_EDGE;
 
 		m_bPictureInPicture = true;
 		m_bShowPerfGraphs = false;
 		m_imgui.SetPictureInPictureMode(true);
+		SDL_SetWindowBordered(m_window, SDL_FALSE);
+		SDL_SetWindowResizable(m_window, SDL_TRUE);
+		SDL_SetWindowMinimumSize(m_window, minimumWidth, minimumHeight);
 		SDL_SetWindowAlwaysOnTop(m_window, SDL_TRUE);
 		SDL_SetWindowSize(m_window, targetWidth, targetHeight);
 		SDL_GetWindowSize(m_window, &targetWidth, &targetHeight);
@@ -2359,6 +2509,8 @@ void CSDLPlayer::setPictureInPictureMode(bool enabled)
 	} else {
 		m_bPictureInPicture = false;
 		SDL_SetWindowAlwaysOnTop(m_window, SDL_FALSE);
+		SDL_SetWindowBordered(m_window, SDL_TRUE);
+		SDL_SetWindowResizable(m_window, SDL_TRUE);
 		m_imgui.SetPictureInPictureMode(false);
 		SDL_SetWindowPosition(m_window, m_pipRestoreX, m_pipRestoreY);
 		SDL_SetWindowSize(m_window, m_pipRestoreW, m_pipRestoreH);

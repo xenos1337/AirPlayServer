@@ -189,6 +189,10 @@ public:
 	void resetZoom();
 	void setCapturePrivacyMode(bool enabled);
 	void setPictureInPictureMode(bool enabled);
+	double pictureInPictureAspectRatio() const;
+	void resizePictureInPictureToAspect();
+	void constrainPictureInPictureRect(WPARAM sizingEdge, RECT* windowRect) const;
+	LRESULT pictureInPictureHitTest(HWND window, LPARAM position) const;
 	void applyConnectionState(bool connected, const char* deviceName);
 	void clearSessionVideoFrame();
 	void stopServerForShutdown();
