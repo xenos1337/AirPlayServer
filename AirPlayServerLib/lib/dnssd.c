@@ -388,7 +388,9 @@ dnssd_register_raop(dnssd_t *dnssd, const char *name, unsigned short port, const
 		dnssd->TXTRecordSetValue(&txtRecord, "vs", strlen(GLOBAL_VERSION), GLOBAL_VERSION);
 		dnssd->TXTRecordSetValue(&txtRecord, "sm", strlen(RAOP_SM), RAOP_SM);
 		dnssd->TXTRecordSetValue(&txtRecord, "ek", strlen(RAOP_EK), RAOP_EK);
-		dnssd->TXTRecordSetValue(&txtRecord, "sf", strlen(RAOP_SF), RAOP_SF);
+		dnssd->TXTRecordSetValue(&txtRecord, "sf",
+			password ? strlen("0x84") : strlen(RAOP_SF),
+			password ? "0x84" : RAOP_SF);
 		dnssd->TXTRecordSetValue(&txtRecord, "ft", strlen(features), features);
 		dnssd->TXTRecordSetValue(&txtRecord, "am", strlen(GLOBAL_MODEL), GLOBAL_MODEL);
 
@@ -431,7 +433,8 @@ dnssd_register_raop(dnssd_t *dnssd, const char *name, unsigned short port, const
 }
 
 int
-dnssd_register_airplay(dnssd_t *dnssd, const char *name, unsigned short port, const char *hwaddr, int hwaddrlen)
+dnssd_register_airplay(dnssd_t *dnssd, const char *name, unsigned short port,
+	const char *hwaddr, int hwaddrlen, int password)
 {
 	TXTRecordRef txtRecord;
 	char deviceid[3*MAX_HWADDR_LEN];
@@ -487,6 +490,9 @@ dnssd_register_airplay(dnssd_t *dnssd, const char *name, unsigned short port, co
 		dnssd->TXTRecordSetValue(&txtRecord, "features", strlen(features), features);
 		dnssd->TXTRecordSetValue(&txtRecord, "model", strlen(GLOBAL_MODEL), GLOBAL_MODEL);
 		dnssd->TXTRecordSetValue(&txtRecord, "flags", strlen(RAOP_SF), RAOP_SF);
+		dnssd->TXTRecordSetValue(&txtRecord, "pw",
+			password ? strlen("true") : strlen("false"),
+			password ? "true" : "false");
 		dnssd->TXTRecordSetValue(&txtRecord, "vv", strlen(RAOP_VV), RAOP_VV);
 
 		/* Register the service on this interface */

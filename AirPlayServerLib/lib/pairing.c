@@ -243,6 +243,25 @@ pairing_session_finish(pairing_session_t *session, const unsigned char signature
 	return 0;
 }
 
+int
+pairing_session_is_finished(pairing_session_t *session)
+{
+	assert(session);
+	return session->status == STATUS_FINISHED;
+}
+
+int
+pairing_session_get_remote_public_key(pairing_session_t *session,
+	unsigned char public_key[32])
+{
+	assert(session);
+	if (public_key == NULL || session->status != STATUS_FINISHED) {
+		return -1;
+	}
+	memcpy(public_key, session->ed_theirs, 32);
+	return 0;
+}
+
 void
 pairing_session_destroy(pairing_session_t *session)
 {

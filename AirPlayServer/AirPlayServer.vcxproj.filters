@@ -18,6 +18,9 @@
     <ClCompile Include="AirPlayServer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="CCleanFeedOutput.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="CAirServerCallback.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -57,6 +60,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CAirServerCallback.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="CCleanFeedOutput.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="CSDLPlayer.h">

@@ -1,7 +1,8 @@
-# AirPlayServer - AirPlay Receiver for Windows
+# AirPlayServer for Windows
 
-A high-performance AirPlay receiver for Windows with real-time video streaming and audio playback.
+AirPlayServer receives AirPlay video, audio, and screen mirroring on Windows.
 
+This project is an updated fork of [fingergit/airplay2-win](https://github.com/fingergit/airplay2-win).
 
 ## Main Screen
 <div align="center">
@@ -48,119 +49,142 @@ A high-performance AirPlay receiver for Windows with real-time video streaming a
     </table>
 </div>
 
-## Installation
+## Install
 
-### Quick Install (Recommended)
+1. Download [AirPlay2-Win-x64.zip](https://github.com/xenos1337/AirPlayServer/releases/latest).
+2. Extract the archive.
+3. Install [Bonjour for Windows](https://support.apple.com/kb/DL999) if it is not already installed. iTunes also includes Bonjour.
+4. Run `AirPlayServer.exe`.
 
-1. **Download the latest release**: [AirPlay2-Win-x64.zip](https://github.com/xenos1337/AirPlayServer/releases/latest)
-2. Extract the zip to a folder of your choice
-3. **Install [Bonjour for Windows](https://support.apple.com/kb/DL999)** if you don't have it already (required for device discovery). Installing iTunes also installs Bonjour.
-4. Run **AirPlayServer.exe** — the server will warn you at startup if Bonjour is missing or not running
+The app warns you at startup if Bonjour is missing or its service is not running.
 
-### Prerequisites
+### Requirements
 
-- Windows 10 or later (x64)
-- **Apple Bonjour for Windows** — required for mDNS device discovery. Install from [Apple's download page](https://support.apple.com/kb/DL999) or install iTunes which bundles it. The server will warn you at startup if Bonjour is missing.
+- Windows 10 or later, x64
+- Apple Bonjour for Windows, used for device discovery over mDNS
 
 ## Features
 
-- **Full AirPlay Support**: Stream video, audio, and mirror your screen from iOS/macOS devices
-- **Quality Presets**: Best (30 FPS), Balanced (60 FPS), and Low latency (60 FPS)
-- **Smooth Playback**: Frame pacing with optimized rendering for stutter-free video
-- **Low Latency**: Efficient YUV to RGB conversion with GPU texture upload
-- **Resizable Window**: Live window resizing with instant feedback
-- **Device Discovery**: Automatic mDNS/Bonjour service advertisement
+- AirPlay video, audio, and screen mirroring from iOS and macOS
+- 30 and 60 FPS quality presets
+- GPU texture upload and YUV to RGB conversion
+- Frame pacing for smoother playback
+- Live window resizing
+- Automatic Bonjour service advertisement
 
-## Usage
+## Use AirPlayServer
 
-1. Launch AirPlayServer
-2. The server automatically advertises itself on the network
-3. Open Control Center on your iOS device (or AirPlay menu on macOS)
-4. Select your Windows PC from the list of available AirPlay devices
-5. Start streaming!
+1. Start AirPlayServer.
+2. Open Control Center on an iPhone or iPad, or open the AirPlay menu on a Mac.
+3. Select the Windows PC from the list.
+4. Start mirroring or playback.
+
+### Optional AirPlay PIN
+
+Enable `Require PIN` from the home screen to approve new connections with a temporary four-digit code. The PIN exists only in memory for the current server session and is never written to disk.
+
+`Hide PIN from screen capture` protects the code from supported Windows recording APIs. After you accept a connection, AirPlayServer enables capture exclusion and waits one second before displaying the PIN locally. The exclusion remains active until the device connects or you cancel. If Windows cannot enable capture exclusion, the app does not display the PIN.
 
 ### Controls
 
 | Key | Action |
 |-----|--------|
-| **H** | Toggle overlay UI |
-| **F** / **Double-click** | Toggle fullscreen |
-| **F1** | Toggle diagnostics while connected (temporarily replaces controls) |
-| **R** | Rotate video 90° clockwise |
-| **Mouse wheel** | Zoom video from fit to 5× |
-| **Left-drag** (while zoomed) | Pan around the zoomed video |
-| Mouse movement | Shows cursor (auto-hides after 5s) |
+| `H` | Toggle session controls |
+| `Ctrl+Shift+H` | Toggle capture privacy |
+| `P` | Toggle picture-in-picture mode |
+| `F` or double-click | Toggle fullscreen |
+| `F1` | Toggle diagnostics while connected |
+| `R` | Rotate video 90 degrees clockwise |
+| Mouse wheel | Zoom from fit to 5x |
+| Left-drag while zoomed | Pan the video |
+| Mouse movement | Show the cursor; it hides after five seconds |
 
-### Quality Presets
+The session controls include `Hide from captures`. This keeps the receiver visible on the local monitor, excludes its main window from supported Windows capture APIs, and sends a black frame to the clean feed. Select `Show in captures` or press `Ctrl+Shift+H` to turn it off.
 
-Changeable in real-time from the connected-session overlay:
+Select `Picture in picture` or press `P` to open a small, borderless window that stays above other apps. PiP uses the current device's aspect ratio when resized. Move the pointer over the window to reveal the close button. You can drag the invisible strip along the top to move it. Press `P` again to restore the previous window size, position, and maximized state. PiP also closes when the device disconnects.
 
-| Preset | FPS | Scaling | Use Case |
-|--------|-----|---------|----------|
-| Best | 30 | Best available | Sharpest image quality |
-| Balanced | 60 | Best available | Default, smooth + sharp |
+### Screen Cast and the OBS clean feed
+
+Enable `Screen Cast mode` from the session controls to create a separate video-only window named `AirPlay Receiver - Clean Feed`. The normal receiver window remains available on the local display.
+
+To use it in OBS:
+
+1. Add a Window Capture source and choose the Windows 10/11 capture method.
+2. Select `AirPlay Receiver - Clean Feed`.
+3. Turn off `Capture Cursor` in OBS.
+
+In Discord, open `Share Your Screen`, choose `Applications`, and select `AirPlay Receiver - Clean Feed`. The window exists only while a device is connected and AirPlayServer is rendering video.
+
+The clean feed follows rotation, zoom, pan, and receiver window resizing. `Crop clean feed to video` removes letterboxing and pillarboxing. AirPlayServer hides the clean feed between sessions and restores it after a device reconnects.
+
+`Hide interface from captures` excludes the local receiver from supported Display Capture paths on Windows 10 version 2004 and later. It is meant to keep controls out of a presentation. It is not DRM. Use Window Capture in OBS for the clean feed.
+
+### Quality presets
+
+You can change the preset from the session controls while video is playing.
+
+| Preset | FPS | Scaling | Intended use |
+|--------|-----|---------|--------------|
+| Best | 30 | Best available | Sharpest image |
+| Balanced | 60 | Best available | Default setting |
 | Low latency | 60 | Linear | Fastest response |
 
 ## Troubleshooting
 
-### Device not appearing on iPhone/iPad/Mac
+### The device does not appear
 
-- Ensure **Bonjour for Windows** is installed and the "Bonjour Service" is running (`services.msc`)
-- Both devices must be on the **same Wi-Fi network and subnet**
-- Check **Windows Firewall** — allow AirPlayServer through for Private networks
+- Check that Bonjour is installed and that `Bonjour Service` is running in `services.msc`.
+- Put both devices on the same Wi-Fi network and subnet.
+- Allow AirPlayServer through Windows Firewall on private networks.
 
-### Connects but no video/audio
+### The device connects but video or audio does not play
 
-- If Windows is in a VM, use **bridged networking** (not NAT)
-- Verify no VPN or proxy is interfering with the connection
+- If Windows is running in a virtual machine, use bridged networking instead of NAT.
+- Disconnect any VPN or proxy that may be intercepting the local connection.
 
-## Building from Source
+## Build from source
 
-Requires Visual Studio 2022 (v143 toolset) and Windows 10 SDK.
+You need Visual Studio 2022 with the v143 toolset and a Windows 10 SDK.
 
-1. Clone the repository
+1. Clone the repository:
+
    ```bash
    git clone https://github.com/xenos1337/AirPlayServer.git
    ```
-2. Open `AirPlay.sln` in Visual Studio
-3. Right-click **AirPlayServer** in Solution Explorer → "Set as Startup Project"
-4. Build with `Ctrl+B`, run with `F5`
 
-Output: `x64\Debug\AirPlayServer.exe`
+2. Open `AirPlay.sln` in Visual Studio.
+3. In Solution Explorer, right-click `AirPlayServer` and select `Set as Startup Project`.
+4. Build with `Ctrl+B` or run with `F5`.
 
-## Project Structure
+The Debug executable is written to `x64\Debug\AirPlayServer.exe`.
 
-```
+## Project layout
+
+```text
 AirPlayServer/
-├── AirPlayServer/           # Main GUI application (C++, SDL2, ImGui)
-│   ├── CSDLPlayer.cpp       # Video/audio player and rendering
-│   ├── CImGuiManager.cpp    # UI overlay management
-│   ├── CAirServer.cpp       # AirPlay server wrapper
-│   └── CAirServerCallback.cpp
-├── AirPlayServerLib/        # Core AirPlay 2 protocol (C static lib)
-│   └── lib/                 # RAOP, pairing, crypto, codecs
-├── airplay2dll/             # AirPlay DLL wrapper + FFmpeg H.264 decode
-├── dnssd/                   # mDNS/Bonjour service discovery DLL
-├── external/                # Third-party libraries (SDL2, FFmpeg, ImGui)
-└── AirPlay.sln              # Visual Studio solution
+|-- AirPlayServer/           # Windows GUI, SDL2, and ImGui
+|   |-- CSDLPlayer.cpp       # Video and audio playback
+|   |-- CImGuiManager.cpp    # Home screen and session controls
+|   |-- CAirServer.cpp       # AirPlay server wrapper
+|   `-- CAirServerCallback.cpp
+|-- AirPlayServerLib/        # AirPlay 2 protocol library
+|   `-- lib/                 # RAOP, pairing, crypto, and codecs
+|-- airplay2dll/             # DLL wrapper and FFmpeg H.264 decoder
+|-- dnssd/                   # Bonjour discovery DLL
+|-- external/                # SDL2, FFmpeg, ImGui, and other dependencies
+`-- AirPlay.sln
 ```
 
 ## Contributing
 
-Issues, feature requests, and pull requests are welcome.
-
-1. Follow the existing code style (C++ with Windows API conventions)
-2. Test on Windows 10/11
-3. Update documentation for new features
+Bug reports, feature requests, and pull requests are welcome. Follow the existing C++ and Windows API style, test on Windows 10 or 11, and update the documentation when behavior changes.
 
 ## License
 
-This project inherits licenses from its constituent libraries. Refer to individual library licenses for terms.
+The repository contains code from several libraries. Check each library's license for its terms.
 
-## Acknowledgments
+## Credits
 
 Thanks to [fingergit](https://github.com/fingergit/airplay2-win) and the AirPlay reverse engineering community.
 
----
-
-**Note**: This is an unofficial implementation. Apple, AirPlay, and related trademarks are property of Apple Inc.
+This is an unofficial implementation. Apple, AirPlay, and related trademarks belong to Apple Inc.

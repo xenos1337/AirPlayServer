@@ -54,6 +54,14 @@ enum EOverlayState
 	OVERLAY_HIDDEN = 2
 };
 
+enum EPinApprovalResult
+{
+	PIN_APPROVAL_NO_ACTION = 0,
+	PIN_APPROVAL_ALLOW,
+	PIN_APPROVAL_DENY,
+	PIN_APPROVAL_DISMISS
+};
+
 class CImGuiManager
 {
 public:
@@ -74,8 +82,13 @@ public:
 		int videoWidth = 0, int videoHeight = 0, float fps = 0.0f, float bitrateMbps = 0.0f,
 		unsigned long long totalFrames = 0, unsigned long long droppedFrames = 0,
 		float zoomLevel = 1.0f, int rotationAngle = 0,
-		bool* pResetView = NULL, bool* pRotateView = NULL);
+		bool* pResetView = NULL, bool* pRotateView = NULL,
+		bool capturePrivacyActive = false, bool* pToggleCapturePrivacy = NULL,
+		bool captureExclusionAvailable = true, bool cleanFeedReady = true,
+		bool pictureInPictureActive = false, bool* pTogglePictureInPicture = NULL);
+	void RenderPictureInPictureControls(bool* pExitPictureInPicture);
 	void RenderPerfGraphs(const SPerfData& perf, bool* pOpen);
+	void SetPictureInPictureMode(bool enabled);
 
 	// Input handling
 	bool WantCaptureMouse() const { return ImGui::GetIO().WantCaptureMouse; }
@@ -84,6 +97,14 @@ public:
 
 	// Get edited device name
 	const char* GetDeviceName() const;
+	bool IsAirPlayPinEnabled() const { return m_airPlayPinEnabled; }
+	bool ShouldProtectPinFromCapture() const { return m_protectPinFromCapture; }
+
+	// The receiver owns the PIN lifetime; ImGui only presents the approval flow.
+	void RequestPinApprovalPopup(bool notify = true);
+	EPinApprovalResult RenderPinApprovalPopup(const char* remoteAddress,
+		const char* pin, bool awaitingApproval, bool preparingPin, bool showPin,
+		bool captureProtectionFailed);
 
 	// Get quality preset
 	EQualityPreset GetQualityPreset() const { return m_qualityPreset; }
@@ -96,6 +117,11 @@ public:
 		m_overlayState = m_overlayState == OVERLAY_EXPANDED
 			? OVERLAY_HIDDEN : OVERLAY_EXPANDED;
 	}
+
+	// Screen-cast settings. The player consumes these directly on the render thread.
+	bool IsScreenCastEnabled() const { return m_screenCastEnabled; }
+	bool ShouldHideInterfaceFromCapture() const { return m_screenCastHideInterface; }
+	bool ShouldCropCleanFeedToVideo() const { return m_screenCastCropToVideo; }
 
 	// Audio controls
 	bool IsAutoAdjustEnabled() const { return m_bAutoAdjust; }
@@ -116,11 +142,15 @@ private:
 	ImFont* m_pFontBody;
 	ImFont* m_pFontHeading;
 	ImFont* m_pFontTitle;
+	ImFont* m_pFontPin;
 	ImFont* m_pFontMono;
 
 	// Device name editing
 	char m_deviceNameBuffer[256];
 	bool m_bEditingDeviceName;
+	bool m_airPlayPinEnabled;
+	bool m_protectPinFromCapture;
+	bool m_pinApprovalPopupRequested;
 
 	// UI state
 	EOverlayState m_overlayState;
@@ -128,9 +158,15 @@ private:
 	bool m_overlayAnchorValid;
 	ImVec2 m_overlayExpandedSize;
 	bool m_overlayExpandedSizeValid;
+	bool m_pictureInPictureMode;
 
 	// Quality preset
 	EQualityPreset m_qualityPreset;
+
+	// Screen-cast clean feed
+	bool m_screenCastEnabled;
+	bool m_screenCastHideInterface;
+	bool m_screenCastCropToVideo;
 
 	// Audio controls
 	float m_deviceVolume;        // Volume from AirPlay device (0.0 to 1.0)
@@ -142,7 +178,10 @@ private:
 	float m_dpiScale;            // System DPI scale factor (1.0 = 96dpi, 1.25 = 120dpi, etc.)
 
 	float GetWindowDpiScale() const;
+	void ApplyWindowMinimumSize();
 	void ApplyDpiScale(float dpiScale);
 	void RebuildFonts();
 	void SetupStyle();
+	void RenderSettingsPopup();
+	void RenderRequirePinSetting(float contentWidth, float scale);
 };

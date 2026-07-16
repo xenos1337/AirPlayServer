@@ -43,6 +43,8 @@ extern "C" {
 // 		void(*audio_set_volume)(void *cls, void *session, float volume);
 // 		void(*audio_set_metadata)(void *cls, void *session, const void *buffer, int buflen);
 // 		void(*audio_set_coverart)(void *cls, void *session, const void *buffer, int buflen);
+		/* Optional in-app approval before a protected /play request receives its PIN. */
+		int (*pin_request)(void *cls, const char *remoteAddress, const char *pin);
 	};
 	typedef struct airplay_callbacks_s airplay_callbacks_t;
 

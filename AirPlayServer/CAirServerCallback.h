@@ -23,6 +23,7 @@ public:
 
 	// Audio volume control (volume in dB: 0.0 = max, -144.0 = mute)
 	virtual void setVolume(float volume, const char* remoteName, const char* remoteDeviceId);
+	virtual bool requestPinApproval(const char* remoteAddress, const char* pin);
 
 	virtual void log(int level, const char* msg);
 
@@ -30,4 +31,3 @@ protected:
 	CSDLPlayer* m_pPlayer;
 	char m_chRemoteDeviceId[128];
 };
-

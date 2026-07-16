@@ -22,12 +22,15 @@ public:
 	// Audio volume control (volume in dB: 0.0 = max, -144.0 = mute)
 	virtual void setVolume(float volume, const char* remoteName, const char* remoteDeviceId) = 0;
 
+	// Runs on the receiver network thread and waits for the app's allow/deny UI.
+	virtual bool requestPinApproval(const char* remoteAddress, const char* pin) = 0;
+
 	virtual void log(int level, const char* msg) = 0;
 };
 
 AIRPLAYSERVER_API void* fgServerStart(const char serverName[AIRPLAY_NAME_LEN], 
 	unsigned int raopPort, unsigned int airplayPort,
-	IAirServerCallback* callback);
+	IAirServerCallback* callback, const char* password);
 AIRPLAYSERVER_API void fgServerStop(void* handle);
 
 AIRPLAYSERVER_API float fgServerScale(void* handle, float fRatio);

@@ -29,6 +29,7 @@ FgAirplayServer::FgAirplayServer()
 // 	m_stAirplayCB.audio_destroy = audio_destroy;
 	m_stAirplayCB.video_play = ap_video_play;
 	m_stAirplayCB.video_get_play_info = ap_video_get_play_info;
+	m_stAirplayCB.pin_request = pin_request;
 
 	m_stRaopCB.connected = connected;
 	m_stRaopCB.disconnected = disconnected;
@@ -40,6 +41,7 @@ FgAirplayServer::FgAirplayServer()
 	m_stRaopCB.audio_flush = audio_flush;
 	// m_stRaopCB.audio_destroy = audio_destroy;
 	m_stRaopCB.video_process = video_process;
+	m_stRaopCB.pin_request = pin_request;
 
 	m_mutexMap = CreateMutex(NULL, FALSE, NULL);
 }
@@ -55,9 +57,10 @@ FgAirplayServer::~FgAirplayServer()
 
 int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN], 
 	unsigned int raopPort, unsigned int airplayPort,
-	IAirServerCallback* callback)
+	IAirServerCallback* callback, const char* password)
 {
 	m_pCallback = callback;
+	const char* authPassword = (password != NULL && password[0] != '\0') ? password : NULL;
 
 	unsigned short raop_port = raopPort;
 	unsigned short airplay_port = airplayPort;
@@ -74,7 +77,7 @@ int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN],
 			ret = -1;
 			break;
 		}
-		ret = airplay_start(m_pAirplay, &airplay_port, hwaddr, sizeof(hwaddr), NULL);
+		ret = airplay_start(m_pAirplay, &airplay_port, hwaddr, sizeof(hwaddr), authPassword);
 		if (ret < 0) {
 			break;
 		}
@@ -89,6 +92,7 @@ int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN],
 
 		raop_set_log_level(m_pRaop, RAOP_LOG_DEBUG);
 		raop_set_log_callback(m_pRaop, &log_callback, this);
+		raop_set_password(m_pRaop, authPassword);
 		ret = raop_start(m_pRaop, &raop_port);
 		if (ret < 0) {
 			break;
@@ -100,11 +104,13 @@ int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN],
 			ret = -1;
 			break;
 		}
-		ret = dnssd_register_raop(m_pDnsSd, serverName, raop_port, hwaddr, sizeof(hwaddr), 0);
+		ret = dnssd_register_raop(m_pDnsSd, serverName, raop_port, hwaddr, sizeof(hwaddr),
+			authPassword != NULL ? 1 : 0);
 		if (ret < 0) {
 			break;
 		}
-		ret = dnssd_register_airplay(m_pDnsSd, serverName, airplay_port, hwaddr, sizeof(hwaddr));
+		ret = dnssd_register_airplay(m_pDnsSd, serverName, airplay_port, hwaddr, sizeof(hwaddr),
+			authPassword != NULL ? 1 : 0);
 		if (ret < 0) {
 			break;
 		}
@@ -399,6 +405,15 @@ void FgAirplayServer::ap_video_get_play_info(void* cls, double* duration, double
 	{
 		pServer->m_pCallback->videoGetPlayInfo(duration, position, rate);
 	}
+}
+
+int FgAirplayServer::pin_request(void* cls, const char* remoteAddress, const char* pin)
+{
+	FgAirplayServer* pServer = (FgAirplayServer*)cls;
+	if (pServer == NULL || pServer->m_pCallback == NULL) {
+		return 0;
+	}
+	return pServer->m_pCallback->requestPinApproval(remoteAddress, pin) ? 1 : 0;
 }
 
 void FgAirplayServer::log_callback(void* cls, int level, const char* msg)

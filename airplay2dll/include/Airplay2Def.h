@@ -21,4 +21,5 @@ typedef struct SFgVideoFrame {
 	unsigned int dataLen[3];
 	unsigned int dataTotalLen;
 	unsigned char* data;
+	unsigned int encodedDataLen;  // H.264 payload bytes that produced this decoded frame
 }SFgVideoFrame;

@@ -6,6 +6,7 @@
 #include "SDL_syswm.h"
 #undef main
 #include "CAirServer.h"
+#include "CCleanFeedOutput.h"
 #include "CImGuiManager.h"
 
 typedef void sdlAudioCallback(void* userdata, Uint8* stream, int len);
@@ -38,6 +39,9 @@ public:
 	void loopEvents();
 	void setServerName(const char* serverName);
 	void setConnected(bool connected, const char* deviceName = NULL);
+	// Called from the receiver's network thread. It waits for the in-app
+	// allow/deny choice, then leaves the temporary PIN visible for the user.
+	bool requestPinApproval(const char* remoteAddress, const char* pin);
 
 	void outputVideo(SFgVideoFrame* data);
 	void outputAudio(SFgAudioFrame* data);
@@ -149,6 +153,18 @@ public:
 	CAirServer m_server;
 	char m_serverName[256];  // Server name for AirPlay display
 	CImGuiManager m_imgui;  // ImGui manager for UI overlay
+	CCleanFeedOutput m_cleanFeed;  // Video-only surface for OBS/Display Capture
+	char m_sessionAirPlayPin[5];  // Temporary 4-digit PIN; never persisted
+	HANDLE m_mutexPinApproval;
+	HANDLE m_eventPinApproval;
+	LONG m_pinApprovalState;
+	LONG m_pinApprovalGeneration;
+	char m_pendingPinRemote[64];
+	char m_pendingPinCode[5];
+	DWORD m_pinPrivacyDelayStart;
+	bool m_pinCaptureExclusionActive;
+	bool m_pinCaptureExclusionReleasePending;
+	bool m_capturePrivacyActive;
 
 	// Connection state for UI
 	bool m_bConnected;
@@ -163,22 +179,43 @@ public:
 	SDL_Rect calculateFittedVideoBounds() const;  // Visible video bounds at 1x, after rotation
 	SDL_Rect calculateZoomedVideoBounds() const;  // Visible video bounds after zoom/pan
 	bool recreateVideoTexture();  // Create and initialize texture from the latest CPU YUV buffer
+	void recreateCleanFeedTexture();
+	void syncScreenCastOutput();
+	SDL_Rect calculateScreenCastCaptureBounds() const;
 	void windowToRendererCoordinates(float windowX, float windowY, float& rendererX, float& rendererY) const;
 	void applyWheelZoom(float wheelDelta, float mouseX, float mouseY);
 	void applyDragPan(float deltaX, float deltaY);
 	void stopPanning();
 	void resetZoom();
+	void setCapturePrivacyMode(bool enabled);
+	void setPictureInPictureMode(bool enabled);
+	double pictureInPictureAspectRatio() const;
+	void applyPictureInPictureWindowShape();
+	void resizePictureInPictureToAspect();
+	void constrainPictureInPictureRect(WPARAM sizingEdge, RECT* windowRect) const;
+	LRESULT pictureInPictureHitTest(HWND window, LPARAM position) const;
 	void applyConnectionState(bool connected, const char* deviceName);
 	void clearSessionVideoFrame();
 	void stopServerForShutdown();
+	bool generateSessionAirPlayPin();
+	void cancelPinApproval();
+	void renderPinApprovalPopup(LONG& lastGeneration);
 	void resizeWindowForVideo(int width, int height);
 	void resizeWindow(int width, int height);  // Handle window resize
 
 	// Window handle for show/hide
 	HWND m_hwnd;
+	WNDPROC m_originalWindowProc;
+	bool m_nativeResizeActive;
+	bool m_nativeResizeRendering;
+	DWORD m_lastNativeResizeRenderTime;
 	bool m_bWindowVisible;
+	bool m_bMainWindowMinimized;
 
 	void handleLiveResize(int width, int height);
+	void renderDuringNativeResize();
+	void installNativeResizeHook();
+	void removeNativeResizeHook();
 	void requestResize(int width, int height);  // Thread-safe: posts event to resize window
 	volatile bool m_bResizing;  // Prevent re-entrancy during resize (volatile for thread safety)
 	volatile int m_pendingResizeWidth;   // Pending resize dimensions
@@ -191,6 +228,12 @@ public:
 	int m_windowedY;
 	int m_windowedW;          // Saved windowed size
 	int m_windowedH;
+	bool m_bPictureInPicture;
+	bool m_pipRestoreMaximized;
+	int m_pipRestoreX;
+	int m_pipRestoreY;
+	int m_pipRestoreW;
+	int m_pipRestoreH;
 
 	// Cursor auto-hide after inactivity
 	DWORD m_lastMouseMoveTime;  // Time of last mouse movement

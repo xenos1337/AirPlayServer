@@ -42,30 +42,27 @@ function New-IconFrame {
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
         [float]$r = $renderSize
-        [float]$margin = $r * 0.055
+        # Windows already applies taskbar padding. Keep only enough transparent
+        # inset to preserve antialiased corners and avoid making the mark tiny.
+        [float]$margin = $r * 0.012
         $tileRect = [System.Drawing.RectangleF]::new(
             $margin,
             $margin,
             $r - 2.0 * $margin,
             $r - 2.0 * $margin)
         $tilePath = New-RoundedRectanglePath $tileRect ($r * 0.205)
-        $tileBrush = [System.Drawing.SolidBrush]::new(
-            [System.Drawing.Color]::FromArgb(255, 16, 26, 38))
-        $tileBorder = [System.Drawing.Pen]::new(
-            [System.Drawing.Color]::FromArgb(255, 43, 73, 103),
-            [Math]::Max(1.0, $r * 0.018))
+        $tileColor = [System.Drawing.Color]::FromArgb(255, 23, 36, 52)
+        $tileBrush = [System.Drawing.SolidBrush]::new($tileColor)
 
         try {
             $graphics.FillPath($tileBrush, $tilePath)
-            $graphics.DrawPath($tileBorder, $tilePath)
         }
         finally {
-            $tileBorder.Dispose()
             $tileBrush.Dispose()
             $tilePath.Dispose()
         }
 
-        $accent = [System.Drawing.Color]::FromArgb(255, 87, 145, 204)
+        $accent = [System.Drawing.Color]::FromArgb(255, 103, 166, 224)
         $screenRect = [System.Drawing.RectangleF]::new(
             $r * 0.220,
             $r * 0.245,
@@ -83,7 +80,6 @@ function New-IconFrame {
             $screenPath.Dispose()
         }
 
-        $tileColor = [System.Drawing.Color]::FromArgb(255, 16, 26, 38)
         [System.Drawing.PointF[]]$cutout = @(
             [System.Drawing.PointF]::new($r * 0.500, $r * 0.410),
             [System.Drawing.PointF]::new($r * 0.755, $r * 0.800),

@@ -65,6 +65,8 @@ struct airplay_conn_s
 	int remotelen;
 
 	char nonce[MAX_NONCE_LEN + 1];
+	int authenticated;
+	int pin_access_granted;
 
 	unsigned char aeskey[16];
 	unsigned char iv[16];
@@ -189,6 +191,29 @@ const char *eventStrings[] = { "playing", "paused", "loading", "stopped" };
 
 #include "airplay_handlers.h"
 
+static void
+airplay_format_remote_address(const airplay_conn_t *conn, char address[64])
+{
+	if (conn->remotelen == 4) {
+		snprintf(address, 64, "%u.%u.%u.%u", conn->remote[0], conn->remote[1],
+			conn->remote[2], conn->remote[3]);
+		return;
+	}
+	strncpy(address, "Nearby device", 64);
+}
+
+static int
+airplay_request_pin_approval(airplay_conn_t *conn)
+{
+	char address[64] = { 0 };
+	if (conn->airplay->password[0] == '\0' || conn->airplay->callbacks.pin_request == NULL) {
+		return 1;
+	}
+	airplay_format_remote_address(conn, address);
+	return conn->airplay->callbacks.pin_request(conn->airplay->callbacks.cls, address,
+		conn->airplay->password) != 0;
+}
+
 static void *
 conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remote, int remotelen)
 {
@@ -290,7 +315,10 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 
 	const char * contentType = http_request_get_header(request, "content-type");
 	const char * m_sessionId = http_request_get_header(request, "x-apple-session-id");
-	const char * authorization = http_request_get_header(request, "authorization");
+	const char * authorization = http_request_get_header(request, "Authorization");
+	if (authorization == NULL) {
+		authorization = http_request_get_header(request, "authorization");
+	}
 	const char * photoAction = http_request_get_header(request, "x-apple-assetaction");
 	const char * photoCacheId = http_request_get_header(request, "x-apple-assetkey");
 
@@ -298,6 +326,50 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	int needAuth = 0;
 
 	logger_log(conn->airplay->logger, LOGGER_DEBUG, "[AirPlay] Handling request %s with URL %s", method, url);
+
+	// Video playback is served on the AirPlay HTTP connection rather than the
+	// RAOP mirroring connection. Challenge /play as well so a PIN protects both
+	// Screen Mirroring and normal AirPlay video playback.
+	if (airplay->password[0] != '\0' && !conn->authenticated &&
+		!strcmp(method, "POST") && !strcmp(url, "/play")) {
+		if (!conn->pin_access_granted) {
+			if (!airplay_request_pin_approval(conn)) {
+				http_response_destroy(*response);
+				*response = http_response_init("HTTP/1.1", 403, "Connection Denied");
+				if (cseq != NULL) {
+					http_response_add_header(*response, "CSeq", cseq);
+				}
+				http_response_add_header(*response, "Server", "AirTunes/845.5.1");
+				http_response_finish(*response, NULL, 0);
+				logger_log(conn->airplay->logger, LOGGER_INFO,
+					"AirPlay PIN request denied");
+				return;
+			}
+			conn->pin_access_granted = 1;
+		}
+		if (digest_is_valid(realm, airplay->password, conn->nonce,
+			method, url, authorization)) {
+			conn->authenticated = 1;
+			logger_log(conn->airplay->logger, LOGGER_INFO,
+				"AirPlay PIN authentication accepted");
+		} else {
+			char challenge[96];
+			snprintf(challenge, sizeof(challenge),
+				"Digest realm=\"%s\", nonce=\"%s\"", realm, conn->nonce);
+			http_response_destroy(*response);
+			*response = http_response_init("HTTP/1.1", AIRPLAY_STATUS_NEED_AUTH,
+				"Unauthorized");
+			if (cseq != NULL) {
+				http_response_add_header(*response, "CSeq", cseq);
+			}
+			http_response_add_header(*response, "Server", "AirTunes/845.5.1");
+			http_response_add_header(*response, "WWW-Authenticate", challenge);
+			http_response_finish(*response, NULL, 0);
+			logger_log(conn->airplay->logger, LOGGER_INFO,
+				"AirPlay PIN authentication required");
+			return;
+		}
+	}
 
 	{
 		int len = 0;

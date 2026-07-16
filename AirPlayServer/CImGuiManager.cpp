@@ -19,6 +19,12 @@ namespace {
 	const ImVec4 UI_SUCCESS = ImVec4(0.36f, 0.72f, 0.50f, 1.00f);
 	const ImVec4 UI_WARNING = ImVec4(0.82f, 0.61f, 0.31f, 1.00f);
 	const ImVec4 UI_ERROR = ImVec4(0.82f, 0.39f, 0.41f, 1.00f);
+	const ImVec4 UI_ALLOW_BUTTON = ImVec4(0.12f, 0.40f, 0.24f, 1.00f);
+	const ImVec4 UI_ALLOW_BUTTON_HOVER = ImVec4(0.16f, 0.53f, 0.31f, 1.00f);
+	const ImVec4 UI_ALLOW_BUTTON_ACTIVE = ImVec4(0.09f, 0.30f, 0.18f, 1.00f);
+	const ImVec4 UI_DENY_BUTTON = ImVec4(0.42f, 0.16f, 0.18f, 1.00f);
+	const ImVec4 UI_DENY_BUTTON_HOVER = ImVec4(0.55f, 0.21f, 0.24f, 1.00f);
+	const ImVec4 UI_DENY_BUTTON_ACTIVE = ImVec4(0.31f, 0.11f, 0.13f, 1.00f);
 	const ImVec4 UI_CANVAS = ImVec4(0.045f, 0.049f, 0.055f, 1.00f);
 	const ImVec4 UI_SURFACE = ImVec4(0.060f, 0.064f, 0.071f, 0.98f);
 	const ImVec4 UI_SURFACE_RAISED = ImVec4(0.088f, 0.093f, 0.102f, 1.00f);
@@ -218,6 +224,7 @@ namespace {
 		default: return "Smooth 60 fps with balanced filtering";
 		}
 	}
+
 }
 
 CImGuiManager::CImGuiManager()
@@ -229,14 +236,22 @@ CImGuiManager::CImGuiManager()
 	, m_pFontBody(NULL)
 	, m_pFontHeading(NULL)
 	, m_pFontTitle(NULL)
+	, m_pFontPin(NULL)
 	, m_pFontMono(NULL)
 	, m_bEditingDeviceName(false)
+	, m_airPlayPinEnabled(true)
+	, m_protectPinFromCapture(true)
+	, m_pinApprovalPopupRequested(false)
 	, m_overlayState(OVERLAY_LAUNCHER)
 	, m_overlayAnchor(0.0f, 0.0f)
 	, m_overlayAnchorValid(false)
 	, m_overlayExpandedSize(0.0f, 0.0f)
 	, m_overlayExpandedSizeValid(false)
+	, m_pictureInPictureMode(false)
 	, m_qualityPreset(QUALITY_BALANCED)  // Default to balanced (60fps, best available filtering)
+	, m_screenCastEnabled(false)
+	, m_screenCastHideInterface(true)
+	, m_screenCastCropToVideo(true)
 	, m_deviceVolume(0.5f)     // Default 50% (will be updated by device)
 	, m_localVolume(1.0f)      // Default 100% local volume
 	, m_bAutoAdjust(false)     // Auto-adjust off by default
@@ -297,19 +312,18 @@ float CImGuiManager::GetWindowDpiScale() const
 	return scale;
 }
 
-void CImGuiManager::ApplyDpiScale(float dpiScale)
+void CImGuiManager::ApplyWindowMinimumSize()
 {
-	if (dpiScale < 1.0f) dpiScale = 1.0f;
-	if (dpiScale > 4.0f) dpiScale = 4.0f;
-	m_dpiScale = dpiScale;
-	m_overlayExpandedSizeValid = false;
-
-	// SDL's minimum-size API uses client pixels. Keep the same effective
-	// 560x420 workspace at higher monitor scales, without requesting more than
-	// the current monitor can physically provide.
+	// PiP only needs room for the video and compact exit control. Normal mode
+	// retains the full workspace required by settings and session controls.
 	if (m_pWindow != NULL) {
-		int minimumWidth = (int)(560.0f * m_dpiScale + 0.5f);
-		int minimumHeight = (int)(420.0f * m_dpiScale + 0.5f);
+		// CSDLPlayer applies a source-aspect-aware minimum while PiP is active.
+		// Avoid an independent width/height floor here because that would force
+		// portrait devices into a wider window with black side bars.
+		float baseWidth = m_pictureInPictureMode ? 1.0f : 560.0f;
+		float baseHeight = m_pictureInPictureMode ? 1.0f : 420.0f;
+		int minimumWidth = (int)(baseWidth * m_dpiScale + 0.5f);
+		int minimumHeight = (int)(baseHeight * m_dpiScale + 0.5f);
 		int borderTop = 0;
 		int borderLeft = 0;
 		int borderBottom = 0;
@@ -331,6 +345,24 @@ void CImGuiManager::ApplyDpiScale(float dpiScale)
 		if (minimumHeight < 1) minimumHeight = 1;
 		SDL_SetWindowMinimumSize(m_pWindow, minimumWidth, minimumHeight);
 	}
+}
+
+void CImGuiManager::SetPictureInPictureMode(bool enabled)
+{
+	if (m_pictureInPictureMode == enabled) {
+		return;
+	}
+	m_pictureInPictureMode = enabled;
+	ApplyWindowMinimumSize();
+}
+
+void CImGuiManager::ApplyDpiScale(float dpiScale)
+{
+	if (dpiScale < 1.0f) dpiScale = 1.0f;
+	if (dpiScale > 4.0f) dpiScale = 4.0f;
+	m_dpiScale = dpiScale;
+	m_overlayExpandedSizeValid = false;
+	ApplyWindowMinimumSize();
 
 	// Recreate the style from an unscaled baseline on every transition. Scaling
 	// the live style in-place would compound after 100% -> 150% -> 100% moves.
@@ -382,9 +414,11 @@ void CImGuiManager::RebuildFonts()
 	}
 	m_pFontHeading = LoadUiFont(io, FindFirstFont(emphasisPaths, 3), 17.0f * m_dpiScale);
 	m_pFontTitle = LoadUiFont(io, FindFirstFont(titlePaths, 3), 25.0f * m_dpiScale);
+	m_pFontPin = LoadUiFont(io, FindFirstFont(titlePaths, 3), 52.0f * m_dpiScale);
 	m_pFontMono = LoadUiFont(io, FindFirstFont(monoPaths, 2), 13.0f * m_dpiScale);
 	if (m_pFontHeading == NULL) m_pFontHeading = m_pFontBody;
 	if (m_pFontTitle == NULL) m_pFontTitle = m_pFontHeading;
+	if (m_pFontPin == NULL) m_pFontPin = m_pFontTitle;
 	if (m_pFontMono == NULL) m_pFontMono = m_pFontBody;
 	io.FontDefault = m_pFontBody;
 }
@@ -407,6 +441,10 @@ bool CImGuiManager::Init(SDL_Window* window, SDL_Renderer* renderer)
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+	// All application windows are positioned explicitly and real preferences
+	// live in airplay_settings.ini. Disable Dear ImGui's transient layout cache
+	// so imgui.ini is neither required nor recreated beside the executable.
+	io.IniFilename = NULL;
 
 	// Configure font atlas for better quality
 	io.Fonts->TexGlyphPadding = 1;  // Padding between glyphs for crisp rendering
@@ -534,6 +572,16 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isServerRunnin
 	DrawAirPlayGlyph(drawList,
 		ImVec2(windowPos.x + contentX + 18.0f * scale,
 			windowPos.y + top + 17.0f * scale), scale);
+	float settingsButtonWidth = 104.0f * scale;
+	float settingsButtonHeight = 34.0f * scale;
+	ImGui::SetCursorPos(ImVec2(screenW - margin - settingsButtonWidth, top));
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f * scale);
+	if (ImGui::Button("Settings##HomeSettings",
+		ImVec2(settingsButtonWidth, settingsButtonHeight))) {
+		ImGui::OpenPopup("Settings##HomeSettings");
+	}
+	ImGui::PopStyleVar();
+	ShowTooltip("Receiver and security settings");
 	const char* statusLabel = isServerRunning ? "Ready" : "Offline";
 	ImGui::SetCursorPos(ImVec2(contentX + 50.0f * scale, top + 8.0f * scale));
 	DrawStatusLine(statusLabel, isServerRunning ? UI_SUCCESS : UI_ERROR, scale);
@@ -567,14 +615,114 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isServerRunnin
 	ImGui::PushTextWrapPos(contentX + contentWidth);
 	ImGui::TextColored(UI_TEXT_SECONDARY, "%s", instruction);
 	ImGui::PopTextWrapPos();
-	float instructionBottom = ImGui::GetItemRectMax().y - windowPos.y;
 
-	ImGui::SetCursorPos(ImVec2(contentX, instructionBottom + 32.0f * scale));
+	ImGui::PopStyleVar(3);
+	RenderSettingsPopup();
+	ImGui::End();
+}
+
+void CImGuiManager::RenderRequirePinSetting(float contentWidth, float scale)
+{
+	float contentX = ImGui::GetCursorPosX();
+	const float pinToggleHeight = 34.0f * scale;
+	const float pinCheckSize = 25.0f * scale;
+	ImVec2 pinToggleMin = ImGui::GetCursorScreenPos();
+	ImGui::PushID("RequirePinSetting");
+	if (ImGui::InvisibleButton("##Toggle", ImVec2(contentWidth, pinToggleHeight))) {
+		m_airPlayPinEnabled = !m_airPlayPinEnabled;
+	}
+	bool pinToggleHovered = ImGui::IsItemHovered();
+	bool pinToggleFocused = ImGui::IsItemFocused();
+	ImGui::PopID();
+
+	ImDrawList* securityDrawList = ImGui::GetWindowDrawList();
+	ImVec2 pinToggleMax(pinToggleMin.x + contentWidth, pinToggleMin.y + pinToggleHeight);
+	if (pinToggleHovered) {
+		securityDrawList->AddRectFilled(pinToggleMin, pinToggleMax,
+			IM_COL32(78, 111, 145, 26), 6.0f * scale);
+	}
+	if (pinToggleFocused) {
+		securityDrawList->AddRect(pinToggleMin, pinToggleMax,
+			ImGui::ColorConvertFloat4ToU32(UI_ACCENT_HOVER), 6.0f * scale, 0,
+			1.0f * scale);
+	}
+	ImVec2 pinCheckMin(pinToggleMin.x + 2.0f * scale,
+		pinToggleMin.y + (pinToggleHeight - pinCheckSize) * 0.5f);
+	ImVec2 pinCheckMax(pinCheckMin.x + pinCheckSize, pinCheckMin.y + pinCheckSize);
+	ImVec4 pinCheckFill = m_airPlayPinEnabled
+		? UI_ALLOW_BUTTON : UI_SURFACE_RAISED;
+	ImVec4 pinCheckBorder = m_airPlayPinEnabled
+		? UI_SUCCESS : ImVec4(0.25f, 0.27f, 0.30f, 1.0f);
+	securityDrawList->AddRectFilled(pinCheckMin, pinCheckMax,
+		ImGui::ColorConvertFloat4ToU32(pinCheckFill), 5.0f * scale);
+	securityDrawList->AddRect(pinCheckMin, pinCheckMax,
+		ImGui::ColorConvertFloat4ToU32(pinCheckBorder), 5.0f * scale, 0,
+		1.0f * scale);
+	if (m_airPlayPinEnabled) {
+		float checkPad = pinCheckSize / 6.0f;
+		ImVec2 pinCheckMarkPos(pinCheckMin.x + checkPad, pinCheckMin.y + checkPad);
+		ImGui::RenderCheckMark(securityDrawList, pinCheckMarkPos,
+			ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY), pinCheckSize - checkPad * 2.0f);
+	}
+	float pinLabelHeight = m_pFontBody != NULL ? m_pFontBody->LegacySize : ImGui::GetTextLineHeight();
+	ImVec2 pinLabelPos(pinCheckMax.x + 10.0f * scale,
+		pinToggleMin.y + (pinToggleHeight - pinLabelHeight) * 0.5f);
+	if (m_pFontBody != NULL) {
+		securityDrawList->AddText(m_pFontBody, m_pFontBody->LegacySize, pinLabelPos,
+			ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY), "Require PIN");
+	} else {
+		securityDrawList->AddText(pinLabelPos, ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY),
+			"Require PIN");
+	}
+	ShowTooltip("Ask for approval before showing a 4-digit PIN for a new connection");
+	float pinToggleBottom = ImGui::GetItemRectMax().y - ImGui::GetWindowPos().y;
+
+	if (m_airPlayPinEnabled) {
+		ImGui::SetCursorPos(ImVec2(contentX, pinToggleBottom + 6.0f * scale));
+		ImGui::PushTextWrapPos(contentX + contentWidth);
+		ImGui::TextColored(UI_TEXT_MUTED,
+			"New connections need your approval. After you allow one, this app shows a 4-digit PIN.");
+		ImGui::PopTextWrapPos();
+		float pinHelpBottom = ImGui::GetItemRectMax().y - ImGui::GetWindowPos().y;
+		ImGui::SetCursorPos(ImVec2(contentX, pinHelpBottom + 4.0f * scale));
+		ImGui::PushTextWrapPos(contentX + contentWidth);
+		ImGui::TextColored(UI_WARNING,
+			"Warning: PIN approval is unreliable with MacBooks/macOS.");
+		ImGui::PopTextWrapPos();
+		ImGui::SetCursorPosX(contentX);
+		if (ImGui::Checkbox("Hide PIN from screen capture", &m_protectPinFromCapture)) {
+			// Persisted with the other security settings on shutdown.
+		}
+		ShowTooltip("Exclude the receiver window from recording before showing the PIN locally");
+	} else {
+		ImGui::SetCursorPos(ImVec2(contentX, pinToggleBottom + 5.0f * scale));
+		ImGui::TextColored(UI_TEXT_MUTED, "Off - devices on your network can connect.");
+	}
+}
+
+void CImGuiManager::RenderSettingsPopup()
+{
+	if (ImGui::IsPopupOpen("Settings##HomeSettings")) {
+		ImGuiViewport* viewport = ImGui::GetMainViewport();
+		if (viewport != NULL) {
+			ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing,
+				ImVec2(0.5f, 0.5f));
+		}
+		ImGui::SetNextWindowSize(ImVec2(460.0f * m_dpiScale, 0.0f), ImGuiCond_Appearing);
+	}
+	if (!ImGui::BeginPopupModal("Settings##HomeSettings", NULL,
+		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse)) {
+		return;
+	}
+
+	if (m_pFontHeading != NULL) ImGui::PushFont(m_pFontHeading);
+	ImGui::TextColored(UI_TEXT_PRIMARY, "Settings");
+	if (m_pFontHeading != NULL) ImGui::PopFont();
+	ImGui::Spacing();
 	ImGui::TextColored(UI_TEXT_SECONDARY, "Receiver name");
-	float labelBottom = ImGui::GetItemRectMax().y - windowPos.y;
-	ImGui::SetCursorPos(ImVec2(contentX, labelBottom + 8.0f * scale));
-	ImGui::PushItemWidth(contentWidth);
-	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * scale, 13.0f * scale));
+	ImGui::PushItemWidth(-1.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+		ImVec2(10.0f * m_dpiScale, 11.0f * m_dpiScale));
 	if (ImGui::InputText("##ReceiverName", m_deviceNameBuffer, sizeof(m_deviceNameBuffer),
 		ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
 		m_bEditingDeviceName = false;
@@ -582,27 +730,172 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isServerRunnin
 	ImGui::PopStyleVar();
 	ImGui::PopItemWidth();
 	m_bEditingDeviceName = ImGui::IsItemActive();
-	float inputBottom = ImGui::GetItemRectMax().y - windowPos.y;
-	ImGui::SetCursorPos(ImVec2(contentX, inputBottom + 8.0f * scale));
-	ImGui::PushTextWrapPos(contentX + contentWidth);
 	ImGui::TextColored(UI_TEXT_MUTED,
-		"Shown in Screen Mirroring. Changes apply automatically.");
-	ImGui::PopTextWrapPos();
+		"Shown in Screen Mirroring. Changes apply automatically when disconnected.");
 
-	ImGui::End();
-	ImGui::PopStyleVar(3);
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+	ImGui::TextColored(UI_TEXT_SECONDARY, "Security");
+	RenderRequirePinSetting(ImGui::GetContentRegionAvail().x, m_dpiScale);
+
+	ImGui::Spacing();
+	if (ImGui::Button("Close", ImVec2(-1.0f, 0.0f))) {
+		m_bEditingDeviceName = false;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
 }
+
+void CImGuiManager::RequestPinApprovalPopup(bool notify)
+{
+	if (notify && !m_pinApprovalPopupRequested) {
+		MessageBeep(MB_ICONASTERISK);
+	}
+	m_pinApprovalPopupRequested = true;
+}
+
+EPinApprovalResult CImGuiManager::RenderPinApprovalPopup(const char* remoteAddress,
+	const char* pin, bool awaitingApproval, bool preparingPin, bool showPin,
+	bool captureProtectionFailed)
+{
+	if (!m_bInitialized) {
+		return PIN_APPROVAL_NO_ACTION;
+	}
+
+	ImGui::SetCurrentContext(m_pContext);
+	if (m_pinApprovalPopupRequested) {
+		ImGui::OpenPopup("AirPlay connection request##PinApproval");
+		m_pinApprovalPopupRequested = false;
+	}
+
+	EPinApprovalResult result = PIN_APPROVAL_NO_ACTION;
+	if (awaitingApproval || preparingPin || showPin || captureProtectionFailed ||
+		m_pinApprovalPopupRequested) {
+		ImGuiViewport* viewport = ImGui::GetMainViewport();
+		if (viewport != NULL) {
+			ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always,
+				ImVec2(0.5f, 0.5f));
+		}
+		// Keep both approval states in one stable modal. AlwaysAutoResize was
+		// shrinking the window after Allow because the PIN view has less text.
+		ImGui::SetNextWindowSize(ImVec2(390.0f * m_dpiScale,
+			260.0f * m_dpiScale), ImGuiCond_Always);
+	}
+	if (!ImGui::BeginPopupModal("AirPlay connection request##PinApproval", NULL,
+		ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoResize)) {
+		return result;
+	}
+
+	if (!awaitingApproval && !preparingPin && !showPin && !captureProtectionFailed) {
+		ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+		return result;
+	}
+
+	if (awaitingApproval) {
+		if (m_pFontHeading != NULL) ImGui::PushFont(m_pFontHeading);
+		ImGui::TextColored(UI_TEXT_PRIMARY, "Allow this AirPlay connection?");
+		if (m_pFontHeading != NULL) ImGui::PopFont();
+		ImGui::Spacing();
+		ImGui::TextColored(UI_TEXT_SECONDARY, "A nearby Apple device wants to connect.");
+		if (remoteAddress != NULL && remoteAddress[0] != '\0') {
+			ImGui::TextColored(UI_TEXT_MUTED, "From %s", remoteAddress);
+		}
+		ImGui::Spacing();
+		ImGui::TextColored(UI_TEXT_MUTED,
+			"Allow it to reveal a 4-digit PIN.");
+
+		const ImGuiStyle& style = ImGui::GetStyle();
+		float buttonWidth = 132.0f * m_dpiScale;
+		float buttonHeight = 40.0f * m_dpiScale;
+		float buttonY = ImGui::GetWindowHeight() - style.WindowPadding.y - buttonHeight;
+		ImGui::SetCursorPos(ImVec2(style.WindowPadding.x, buttonY));
+		ImGui::PushStyleColor(ImGuiCol_Button, UI_DENY_BUTTON);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UI_DENY_BUTTON_HOVER);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, UI_DENY_BUTTON_ACTIVE);
+		if (ImGui::Button("Deny", ImVec2(buttonWidth, buttonHeight))) {
+			ImGui::CloseCurrentPopup();
+			result = PIN_APPROVAL_DENY;
+		}
+		ImGui::PopStyleColor(3);
+		ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - style.WindowPadding.x - buttonWidth,
+			buttonY));
+		ImGui::PushStyleColor(ImGuiCol_Button, UI_ALLOW_BUTTON);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UI_ALLOW_BUTTON_HOVER);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, UI_ALLOW_BUTTON_ACTIVE);
+		if (ImGui::Button("Allow", ImVec2(buttonWidth, buttonHeight))) {
+			result = PIN_APPROVAL_ALLOW;
+		}
+		ImGui::PopStyleColor(3);
+	} else if (captureProtectionFailed) {
+		if (m_pFontHeading != NULL) ImGui::PushFont(m_pFontHeading);
+		ImGui::TextColored(UI_WARNING, "PIN kept private");
+		if (m_pFontHeading != NULL) ImGui::PopFont();
+		ImGui::Spacing();
+		ImGui::PushTextWrapPos();
+		ImGui::TextColored(UI_TEXT_SECONDARY,
+			"Windows could not exclude this window from screen capture, so the PIN was not shown.");
+		ImGui::PopTextWrapPos();
+
+		const ImGuiStyle& style = ImGui::GetStyle();
+		float buttonHeight = 40.0f * m_dpiScale;
+		float buttonY = ImGui::GetWindowHeight() - style.WindowPadding.y - buttonHeight;
+		ImGui::SetCursorPosY(buttonY);
+		if (ImGui::Button("Cancel connection", ImVec2(-1.0f, buttonHeight))) {
+			ImGui::CloseCurrentPopup();
+			result = PIN_APPROVAL_DISMISS;
+		}
+	} else if (preparingPin) {
+		// Capture exclusion is active. Keep the PIN dialog closed for one second
+		// so recording software can observe the exclusion before digits exist.
+		ImGui::CloseCurrentPopup();
+	} else {
+		if (m_pFontHeading != NULL) ImGui::PushFont(m_pFontHeading);
+		ImGui::TextColored(UI_SUCCESS, "Connection approved");
+		if (m_pFontHeading != NULL) ImGui::PopFont();
+		ImGui::Spacing();
+		ImGui::TextColored(UI_TEXT_SECONDARY,
+			"Enter this PIN on your Apple device:");
+		ImGui::Spacing();
+		const char* displayPin = (pin != NULL && pin[0] != '\0') ? pin : "----";
+		if (m_pFontPin != NULL) ImGui::PushFont(m_pFontPin);
+		float pinWidth = ImGui::CalcTextSize(displayPin).x;
+		ImGui::SetCursorPosX((ImGui::GetWindowWidth() - pinWidth) * 0.5f);
+		ImGui::TextColored(UI_TEXT_PRIMARY, "%s", displayPin);
+		if (m_pFontPin != NULL) ImGui::PopFont();
+
+		const ImGuiStyle& style = ImGui::GetStyle();
+		float buttonHeight = 40.0f * m_dpiScale;
+		float buttonY = ImGui::GetWindowHeight() - style.WindowPadding.y - buttonHeight;
+		ImGui::SetCursorPosY(buttonY);
+		if (ImGui::Button("Cancel", ImVec2(-1.0f, buttonHeight))) {
+			ImGui::CloseCurrentPopup();
+			result = PIN_APPROVAL_DISMISS;
+		}
+	}
+
+	ImGui::EndPopup();
+	return result;
+}
+
 void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, const char* connectedDeviceName,
 	int videoWidth, int videoHeight, float fps, float bitrateMbps,
 	unsigned long long totalFrames, unsigned long long droppedFrames,
 	float zoomLevel, int rotationAngle,
-	bool* pResetView, bool* pRotateView)
+	bool* pResetView, bool* pRotateView,
+	bool capturePrivacyActive, bool* pToggleCapturePrivacy,
+	bool captureExclusionAvailable, bool cleanFeedReady,
+	bool pictureInPictureActive, bool* pTogglePictureInPicture)
 {
 	if (!m_bInitialized) {
 		return;
 	}
 	if (pResetView != NULL) *pResetView = false;
 	if (pRotateView != NULL) *pRotateView = false;
+	if (pToggleCapturePrivacy != NULL) *pToggleCapturePrivacy = false;
+	if (pTogglePictureInPicture != NULL) *pTogglePictureInPicture = false;
 
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiIO& io = ImGui::GetIO();
@@ -761,7 +1054,6 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	if (droppedFrames > 0) {
 		ImGui::TextColored(UI_WARNING, "%llu of %llu frames dropped", droppedFrames, totalFrames);
 	}
-
 	ImGui::Dummy(ImVec2(0.0f, 2.0f * scale));
 	ImGui::Separator();
 	ImGui::TextColored(UI_TEXT_SECONDARY, "View");
@@ -789,6 +1081,57 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	}
 	if (defaultView) ImGui::EndDisabled();
 	ShowTooltip("Return to fit-to-window at 0 degrees");
+	if (ImGui::Button(pictureInPictureActive
+		? "Exit picture in picture##PictureInPicture"
+		: "Picture in picture##PictureInPicture",
+		ImVec2(-1.0f, 34.0f * scale))) {
+		if (pTogglePictureInPicture != NULL) *pTogglePictureInPicture = true;
+	}
+	ShowTooltip(pictureInPictureActive
+		? "Restore the normal receiver window (P)"
+		: "Keep a compact video window above other apps (P)");
+	if (ImGui::Button(capturePrivacyActive ? "Show in captures##CapturePrivacy" : "Hide from captures##CapturePrivacy",
+		ImVec2(-1.0f, 34.0f * scale))) {
+		if (pToggleCapturePrivacy != NULL) *pToggleCapturePrivacy = true;
+	}
+	ShowTooltip(capturePrivacyActive
+		? "Allow recording software to see the receiver again"
+		: "Keep the receiver visible locally, exclude it from capture, and black the clean feed");
+	if (!captureExclusionAvailable) {
+		ImGui::TextColored(UI_WARNING, "Windows capture exclusion is unavailable.");
+	}
+
+	ImGui::Dummy(ImVec2(0.0f, 2.0f * scale));
+	ImGui::Separator();
+	ImGui::TextColored(UI_TEXT_PRIMARY, "Screen Cast");
+	if (ImGui::Checkbox("Enable Screen Cast mode", &m_screenCastEnabled)) {
+		// CSDLPlayer applies the output transition on this render frame.
+	}
+	ShowTooltip("Keep controls visible locally while exposing a clean OBS video source");
+	if (m_screenCastEnabled) {
+		ImGui::Indent(12.0f * scale);
+		if (ImGui::Checkbox("Hide interface from captures", &m_screenCastHideInterface)) {
+			// Uses Windows capture exclusion when the operating system supports it.
+		}
+		ShowTooltip("Hides this receiver window from Display Capture; use the clean-feed source in OBS");
+		if (ImGui::Checkbox("Crop clean feed to video", &m_screenCastCropToVideo)) {
+			// The output geometry updates from the next rendered frame.
+		}
+		ShowTooltip("Removes letterboxing and pillarboxing from the clean OBS feed");
+
+		ImGui::TextColored(cleanFeedReady ? UI_SUCCESS : UI_WARNING,
+			"Share source: AirPlay Receiver - Clean Feed");
+		ShowTooltip("Select this source in OBS Window Capture or Discord's Applications picker");
+		if (!cleanFeedReady) {
+			ImGui::TextColored(UI_WARNING,
+				"Clean feed is waiting for its renderer to start");
+		}
+		if (m_screenCastHideInterface && !captureExclusionAvailable) {
+			ImGui::TextColored(UI_WARNING,
+				"Display Capture protection is unavailable on this Windows version");
+		}
+		ImGui::Unindent(12.0f * scale);
+	}
 
 	ImGui::Dummy(ImVec2(0.0f, 2.0f * scale));
 	ImGui::Separator();
@@ -841,6 +1184,43 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	ImGui::End();
 	ImGui::PopStyleVar(3);
 }
+
+void CImGuiManager::RenderPictureInPictureControls(bool* pExitPictureInPicture)
+{
+	if (pExitPictureInPicture != NULL) *pExitPictureInPicture = false;
+	if (!m_bInitialized) {
+		return;
+	}
+
+	ImGui::SetCurrentContext(m_pContext);
+	ImGuiIO& io = ImGui::GetIO();
+	bool pointerInside = io.MousePos.x >= 0.0f && io.MousePos.y >= 0.0f &&
+		io.MousePos.x < io.DisplaySize.x && io.MousePos.y < io.DisplaySize.y;
+	if (!pointerInside) {
+		return;
+	}
+	float scale = m_dpiScale;
+	float margin = 7.0f * scale;
+	float closeSize = 30.0f * scale;
+	ImVec2 controlSize(closeSize, closeSize);
+	ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - margin, margin),
+		ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+	ImGui::SetNextWindowSize(controlSize, ImGuiCond_Always);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+	ImGui::Begin("##PictureInPictureControls", NULL,
+		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+		ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+	if (DrawCloseButton("##ExitPictureInPicture", closeSize, scale) &&
+		pExitPictureInPicture != NULL) {
+		*pExitPictureInPicture = true;
+	}
+	ShowTooltip("Restore the normal receiver window (P)");
+	ImGui::End();
+	ImGui::PopStyleVar(2);
+}
+
 // Helper: draw a quiet sparkline using ImDrawList.
 // data is a circular buffer, offset is the write position (oldest data)
 static void DrawLineGraph(ImDrawList* drawList, ImVec2 pos, ImVec2 size,
@@ -1279,6 +1659,16 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 		m_qualityPreset = (EQualityPreset)preset;
 	}
 
+	// Screen-cast defaults preserve the existing receiver behavior until enabled.
+	m_screenCastEnabled = GetPrivateProfileIntA("ScreenCast", "Enabled", 0, iniPath) != 0;
+	m_screenCastHideInterface = GetPrivateProfileIntA("ScreenCast", "HideInterface", 1, iniPath) != 0;
+	m_screenCastCropToVideo = GetPrivateProfileIntA("ScreenCast", "CropToVideo", 1, iniPath) != 0;
+
+	// Secure-by-default: the toggle is the only persisted PIN setting. The
+	// temporary four-digit PIN is generated in memory by the receiver.
+	m_airPlayPinEnabled = GetPrivateProfileIntA("Security", "RequirePin", 1, iniPath) != 0;
+	m_protectPinFromCapture = GetPrivateProfileIntA("Security", "HidePin", 1, iniPath) != 0;
+
 	// Load the three-state overlay setting. Preserve an explicit legacy hidden
 	// choice; only a missing legacy key uses the discoverable launcher default.
 	char legacyOverlay[16] = { 0 };
@@ -1322,10 +1712,24 @@ void CImGuiManager::SaveSettings(const char* iniPath)
 	WritePrivateProfileStringA("General", "DeviceName",
 		m_deviceNameBuffer[0] ? m_deviceNameBuffer : "", iniPath);
 
+	WritePrivateProfileStringA("Security", "RequirePin",
+		m_airPlayPinEnabled ? "1" : "0", iniPath);
+	WritePrivateProfileStringA("Security", "HidePin",
+		m_protectPinFromCapture ? "1" : "0", iniPath);
+	// Remove the old persistent custom-PIN value when a new build saves settings.
+	WritePrivateProfileStringA("Security", "PinProtected", NULL, iniPath);
+
 	// Save quality preset
 	char buf[16];
 	sprintf_s(buf, sizeof(buf), "%d", (int)m_qualityPreset);
 	WritePrivateProfileStringA("General", "QualityPreset", buf, iniPath);
+
+	WritePrivateProfileStringA("ScreenCast", "Enabled",
+		m_screenCastEnabled ? "1" : "0", iniPath);
+	WritePrivateProfileStringA("ScreenCast", "HideInterface",
+		m_screenCastHideInterface ? "1" : "0", iniPath);
+	WritePrivateProfileStringA("ScreenCast", "CropToVideo",
+		m_screenCastCropToVideo ? "1" : "0", iniPath);
 
 	// Save the explicit overlay state. Keep the legacy boolean for older builds.
 	sprintf_s(buf, sizeof(buf), "%d", (int)m_overlayState);

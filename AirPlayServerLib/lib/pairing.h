@@ -29,6 +29,9 @@ int pairing_session_handshake(pairing_session_t *session, const unsigned char ec
 int pairing_session_get_public_key(pairing_session_t *session, unsigned char ecdh_key[32]);
 int pairing_session_get_signature(pairing_session_t *session, unsigned char signature[64]);
 int pairing_session_finish(pairing_session_t *session, const unsigned char signature[64]);
+int pairing_session_is_finished(pairing_session_t *session);
+int pairing_session_get_remote_public_key(pairing_session_t *session,
+	unsigned char public_key[32]);
 void pairing_session_destroy(pairing_session_t *session);
 
 void pairing_destroy(pairing_t *pairing);

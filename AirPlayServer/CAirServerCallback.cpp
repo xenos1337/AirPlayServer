@@ -99,6 +99,11 @@ void CAirServerCallback::setVolume(float volume, const char* remoteName, const c
 	}
 }
 
+bool CAirServerCallback::requestPinApproval(const char* remoteAddress, const char* pin)
+{
+	return m_pPlayer != NULL && m_pPlayer->requestPinApproval(remoteAddress, pin);
+}
+
 double dbDuration = 10000;
 double dbPosition = 0;
 void CAirServerCallback::videoGetPlayInfo(double* duration, double* position, double* rate)

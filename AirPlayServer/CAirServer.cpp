@@ -42,7 +42,8 @@ bool getHostName(char hostName[512])
 	return false;
 }
 
-void CAirServer::start(CSDLPlayer* pPlayer, const char* serverName)
+void CAirServer::start(CSDLPlayer* pPlayer, const char* serverName,
+	const char* password)
 {
     stop();
     m_pPlayer = pPlayer;
@@ -57,7 +58,7 @@ void CAirServer::start(CSDLPlayer* pPlayer, const char* serverName)
 	} else {
 		sprintf_s(finalServerName, 1024, "%s", hostName);
 	}
-    m_pServer = fgServerStart(finalServerName, 5001, 7001, m_pCallback);
+    m_pServer = fgServerStart(finalServerName, 5001, 7001, m_pCallback, password);
 }
 
 void CAirServer::stop()
@@ -68,10 +69,10 @@ void CAirServer::stop()
     }
 }
 
-void CAirServer::restart(const char* serverName)
+void CAirServer::restart(const char* serverName, const char* password)
 {
     if (m_pPlayer != NULL) {
-        start(m_pPlayer, serverName);
+        start(m_pPlayer, serverName, password);
     }
 }
 

@@ -48,6 +48,8 @@ struct raop_callbacks_s {
 	void  (*audio_set_coverart)(void *cls, void *session, const void *buffer, int buflen, const char* remoteName, const char* remoteDeviceId);
 	void  (*audio_remote_control_id)(void *cls, const char *dacp_id, const char *active_remote_header, const char* remoteName, const char* remoteDeviceId);
 	void  (*audio_set_progress)(void *cls, void *session, unsigned int start, unsigned int curr, unsigned int end, const char* remoteName, const char* remoteDeviceId);
+	/* Optional in-app approval before a protected connection receives its PIN. */
+	int (*pin_request)(void *cls, const char *remoteAddress, const char *pin);
 };
 typedef struct raop_callbacks_s raop_callbacks_t;
 
@@ -55,6 +57,7 @@ RAOP_API raop_t *raop_init(int max_clients, raop_callbacks_t *callbacks);
 
 RAOP_API void raop_set_log_level(raop_t *raop, int level);
 RAOP_API void raop_set_log_callback(raop_t *raop, raop_log_callback_t callback, void *cls);
+RAOP_API void raop_set_password(raop_t *raop, const char *password);
 RAOP_API void raop_log(raop_t* raop, int level, const char* fmt, ...);
 RAOP_API void raop_set_port(raop_t *raop, unsigned short port);
 RAOP_API unsigned short raop_get_port(raop_t *raop);

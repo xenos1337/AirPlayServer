@@ -3,10 +3,10 @@
 
 void* fgServerStart(const char serverName[AIRPLAY_NAME_LEN], 
 	unsigned int raopPort, unsigned int airplayPort,
-	IAirServerCallback* callback) 
+	IAirServerCallback* callback, const char* password)
 {
 	FgAirplayServer* pServer = new FgAirplayServer();
-	pServer->start(serverName, raopPort, airplayPort, callback);
+	pServer->start(serverName, raopPort, airplayPort, callback, password);
 	return pServer;
 }
 

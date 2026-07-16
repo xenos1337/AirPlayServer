@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <malloc.h>  // For _aligned_malloc/_aligned_free
 #include <math.h>    // For powf() in volume conversion
+#include <stdlib.h>
 #include <new>
 #include "CAutoLock.h"
 #include "resource.h"
@@ -10,10 +11,12 @@
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <functiondiscoverykeys_devpkey.h>
+#include <bcrypt.h>
 
 // Link against required libraries
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 // GPU handles YUV→RGB conversion through SDL2's renderer-specific YUV shader
 
@@ -27,6 +30,22 @@ namespace {
 	constexpr DWORD DISCONNECT_FADE_OUT_MS = 320;
 	constexpr int MIN_WINDOW_WIDTH = 560;
 	constexpr int MIN_WINDOW_HEIGHT = 420;
+	constexpr int PIP_LONG_EDGE = 420;
+	constexpr int PIP_MIN_LONG_EDGE = 240;
+	constexpr int PIP_EDGE_MARGIN = 24;
+	constexpr DWORD NATIVE_RESIZE_FRAME_INTERVAL_MS = 16;
+	constexpr UINT_PTR NATIVE_RESIZE_TIMER_ID = 0x41525052;
+	const wchar_t NATIVE_RESIZE_PLAYER_PROPERTY[] = L"AirPlayReceiver.NativeResizePlayer";
+	constexpr DWORD PIN_APPROVAL_TIMEOUT_MS = 60000;
+	constexpr DWORD PIN_PRIVACY_DELAY_MS = 1000;
+	enum EPinApprovalState
+	{
+		PIN_APPROVAL_IDLE = 0,
+		PIN_APPROVAL_WAITING,
+		PIN_APPROVAL_PREPARING_CODE,
+		PIN_APPROVAL_SHOWING_CODE,
+		PIN_APPROVAL_CAPTURE_FAILED
+	};
 
 	struct SConnectionStateChange
 	{
@@ -51,6 +70,73 @@ namespace {
 		if (value < minimum) return minimum;
 		if (value > maximum) return maximum;
 		return value;
+	}
+
+	bool IsEventForDifferentWindow(const SDL_Event& event, Uint32 mainWindowId)
+	{
+		if (mainWindowId == 0) return false;
+		Uint32 eventWindowId = 0;
+		switch (event.type) {
+		case SDL_WINDOWEVENT: eventWindowId = event.window.windowID; break;
+		case SDL_KEYDOWN:
+		case SDL_KEYUP: eventWindowId = event.key.windowID; break;
+		case SDL_TEXTEDITING: eventWindowId = event.edit.windowID; break;
+		case SDL_TEXTINPUT: eventWindowId = event.text.windowID; break;
+		case SDL_MOUSEMOTION: eventWindowId = event.motion.windowID; break;
+		case SDL_MOUSEBUTTONDOWN:
+		case SDL_MOUSEBUTTONUP: eventWindowId = event.button.windowID; break;
+		case SDL_MOUSEWHEEL: eventWindowId = event.wheel.windowID; break;
+		case SDL_DROPFILE:
+		case SDL_DROPTEXT:
+		case SDL_DROPBEGIN:
+		case SDL_DROPCOMPLETE: eventWindowId = event.drop.windowID; break;
+		default: return false;
+		}
+		return eventWindowId != 0 && eventWindowId != mainWindowId;
+	}
+
+	LRESULT CALLBACK NativeResizeWindowProc(HWND window, UINT message,
+		WPARAM wParam, LPARAM lParam)
+	{
+		CSDLPlayer* player = (CSDLPlayer*)GetPropW(window,
+			NATIVE_RESIZE_PLAYER_PROPERTY);
+		if (player == NULL || player->m_originalWindowProc == NULL) {
+			return DefWindowProcW(window, message, wParam, lParam);
+		}
+		if (player->m_bPictureInPicture && message == WM_NCHITTEST) {
+			return player->pictureInPictureHitTest(window, lParam);
+		}
+		if (player->m_bPictureInPicture && message == WM_SIZING) {
+			player->constrainPictureInPictureRect(wParam, (RECT*)lParam);
+			return TRUE;
+		}
+
+		if (message == WM_ENTERSIZEMOVE) {
+			// DefWindowProc enters a modal sizing loop after this message. A native
+			// timer keeps the SDL renderer alive while that loop owns the thread.
+			player->m_nativeResizeActive = true;
+			player->m_lastNativeResizeRenderTime = 0;
+			SetTimer(window, NATIVE_RESIZE_TIMER_ID,
+				NATIVE_RESIZE_FRAME_INTERVAL_MS, NULL);
+		} else if (message == WM_EXITSIZEMOVE) {
+			KillTimer(window, NATIVE_RESIZE_TIMER_ID);
+			player->m_nativeResizeActive = false;
+			player->m_nativeResizeRendering = false;
+			player->m_lastNativeResizeRenderTime = 0;
+		}
+
+		if (message == WM_TIMER && wParam == NATIVE_RESIZE_TIMER_ID) {
+			player->renderDuringNativeResize();
+			return 0;
+		}
+
+		LRESULT result = CallWindowProcW(player->m_originalWindowProc,
+			window, message, wParam, lParam);
+		if (player->m_nativeResizeActive &&
+			(message == WM_SIZE || message == WM_PAINT)) {
+			player->renderDuringNativeResize();
+		}
+		return result;
 	}
 
 	void ApplyNativeWindowTheme(HWND window)
@@ -185,8 +271,21 @@ CSDLPlayer::CSDLPlayer()
 	, m_windowWidth(800)
 	, m_windowHeight(600)
 	, m_server()
+	, m_mutexPinApproval(NULL)
+	, m_eventPinApproval(NULL)
+	, m_pinApprovalState(PIN_APPROVAL_IDLE)
+	, m_pinApprovalGeneration(0)
+	, m_pinPrivacyDelayStart(0)
+	, m_pinCaptureExclusionActive(false)
+	, m_pinCaptureExclusionReleasePending(false)
+	, m_capturePrivacyActive(false)
 	, m_hwnd(NULL)
+	, m_originalWindowProc(NULL)
+	, m_nativeResizeActive(false)
+	, m_nativeResizeRendering(false)
+	, m_lastNativeResizeRenderTime(0)
 	, m_bWindowVisible(false)
+	, m_bMainWindowMinimized(false)
 	, m_bResizing(false)
 	, m_pendingResizeWidth(800)
 	, m_pendingResizeHeight(600)
@@ -195,6 +294,12 @@ CSDLPlayer::CSDLPlayer()
 	, m_windowedY(0)
 	, m_windowedW(800)
 	, m_windowedH(600)
+	, m_bPictureInPicture(false)
+	, m_pipRestoreMaximized(false)
+	, m_pipRestoreX(0)
+	, m_pipRestoreY(0)
+	, m_pipRestoreW(800)
+	, m_pipRestoreH(600)
 	, m_lastMouseMoveTime(0)
 	, m_bCursorHidden(false)
 	, m_panCursor(NULL)
@@ -204,12 +309,17 @@ CSDLPlayer::CSDLPlayer()
 	ZeroMemory(&m_displayRect, sizeof(SDL_Rect));
 	ZeroMemory(m_serverName, sizeof(m_serverName));
 	ZeroMemory(m_connectedDeviceName, sizeof(m_connectedDeviceName));
+	SecureZeroMemory(m_sessionAirPlayPin, sizeof(m_sessionAirPlayPin));
+	SecureZeroMemory(m_pendingPinRemote, sizeof(m_pendingPinRemote));
+	SecureZeroMemory(m_pendingPinCode, sizeof(m_pendingPinCode));
 	m_bConnected = false;
 	m_shuttingDown = 0;
 	m_bDisconnecting = false;
 	m_dwDisconnectStartTime = 0;
 	m_mutexAudio = CreateMutex(NULL, FALSE, NULL);
 	m_mutexVideo = CreateMutex(NULL, FALSE, NULL);
+	m_mutexPinApproval = CreateMutex(NULL, FALSE, NULL);
+	m_eventPinApproval = CreateEvent(NULL, TRUE, FALSE, NULL);
 	m_audioVolume = SDL_MIX_MAXVOLUME / 2;  // Half volume by default
 	m_localVolume = SDL_MIX_MAXVOLUME;     // Full local volume by default
 
@@ -304,6 +414,8 @@ CSDLPlayer::~CSDLPlayer()
 
 	CloseHandle(m_mutexAudio);
 	CloseHandle(m_mutexVideo);
+	if (m_eventPinApproval != NULL) CloseHandle(m_eventPinApproval);
+	if (m_mutexPinApproval != NULL) CloseHandle(m_mutexPinApproval);
 }
 
 bool CSDLPlayer::init()
@@ -340,6 +452,7 @@ bool CSDLPlayer::init()
 		m_hwnd = wmInfo.info.win.window;
 		ApplyNativeWindowTheme(m_hwnd);
 		ApplyNativeWindowIcon(m_hwnd);
+		installNativeResizeHook();
 	}
 
 	// Initialize ImGui with SDL2 backends
@@ -368,13 +481,180 @@ bool CSDLPlayer::init()
 		}
 	}
 
+	if (!m_cleanFeed.Init(m_window, m_hwnd)) {
+		printf("Clean-feed output is unavailable because the main HWND could not be resolved\n");
+	}
+	syncScreenCastOutput();
+
 	// Start with window visible to show home screen
 	showWindow();
 
-	// Auto-start the server (server name should be set before init() is called)
-	m_server.start(this, strlen(m_serverName) > 0 ? m_serverName : NULL);
+	// Auto-start the server (server name should be set before init() is called).
+	// The PIN is short-lived and memory-only; settings only remember whether it
+	// is required at all.
+	if (m_imgui.IsAirPlayPinEnabled() && !generateSessionAirPlayPin()) {
+		printf("Could not generate the AirPlay session PIN\n");
+		return false;
+	}
+	m_server.start(this, strlen(m_serverName) > 0 ? m_serverName : NULL,
+		m_imgui.IsAirPlayPinEnabled() ? m_sessionAirPlayPin : NULL);
 
 	return true;
+}
+
+bool CSDLPlayer::generateSessionAirPlayPin()
+{
+	unsigned int randomValue = 0;
+	if (BCryptGenRandom(NULL, (PUCHAR)&randomValue, sizeof(randomValue),
+		BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+		SecureZeroMemory(m_sessionAirPlayPin, sizeof(m_sessionAirPlayPin));
+		return false;
+	}
+
+	unsigned int pin = (randomValue % 9999U) + 1U;
+	sprintf_s(m_sessionAirPlayPin, sizeof(m_sessionAirPlayPin), "%04u", pin);
+	return true;
+}
+
+bool CSDLPlayer::requestPinApproval(const char* remoteAddress, const char* pin)
+{
+	if (m_mutexPinApproval == NULL || m_eventPinApproval == NULL ||
+		InterlockedCompareExchange(&m_shuttingDown, 0, 0) != 0 || pin == NULL ||
+		strlen(pin) != 4) {
+		return false;
+	}
+
+	if (WaitForSingleObject(m_mutexPinApproval, INFINITE) != WAIT_OBJECT_0) {
+		return false;
+	}
+	if (m_pinApprovalState != PIN_APPROVAL_IDLE) {
+		ReleaseMutex(m_mutexPinApproval);
+		return false;
+	}
+
+	strncpy_s(m_pendingPinRemote, sizeof(m_pendingPinRemote),
+		(remoteAddress != NULL && remoteAddress[0] != '\0') ? remoteAddress : "Unknown device",
+		_TRUNCATE);
+	strncpy_s(m_pendingPinCode, sizeof(m_pendingPinCode), pin, _TRUNCATE);
+	m_pinApprovalState = PIN_APPROVAL_WAITING;
+	m_pinPrivacyDelayStart = 0;
+	InterlockedIncrement(&m_pinApprovalGeneration);
+	ResetEvent(m_eventPinApproval);
+	ReleaseMutex(m_mutexPinApproval);
+
+	requestShowWindow();
+	DWORD waitResult = WaitForSingleObject(m_eventPinApproval, PIN_APPROVAL_TIMEOUT_MS);
+
+	if (WaitForSingleObject(m_mutexPinApproval, INFINITE) != WAIT_OBJECT_0) {
+		return false;
+	}
+	bool approved = waitResult == WAIT_OBJECT_0 &&
+		m_pinApprovalState == PIN_APPROVAL_SHOWING_CODE;
+	if (!approved) {
+		m_pinApprovalState = PIN_APPROVAL_IDLE;
+		SecureZeroMemory(m_pendingPinRemote, sizeof(m_pendingPinRemote));
+		SecureZeroMemory(m_pendingPinCode, sizeof(m_pendingPinCode));
+	}
+	ReleaseMutex(m_mutexPinApproval);
+	return approved;
+}
+
+void CSDLPlayer::cancelPinApproval()
+{
+	if (m_mutexPinApproval == NULL || m_eventPinApproval == NULL) {
+		return;
+	}
+	if (WaitForSingleObject(m_mutexPinApproval, INFINITE) != WAIT_OBJECT_0) {
+		return;
+	}
+	m_pinApprovalState = PIN_APPROVAL_IDLE;
+	m_pinPrivacyDelayStart = 0;
+	InterlockedIncrement(&m_pinApprovalGeneration);
+	SecureZeroMemory(m_pendingPinRemote, sizeof(m_pendingPinRemote));
+	SecureZeroMemory(m_pendingPinCode, sizeof(m_pendingPinCode));
+	SetEvent(m_eventPinApproval);
+	ReleaseMutex(m_mutexPinApproval);
+}
+
+void CSDLPlayer::renderPinApprovalPopup(LONG& lastGeneration)
+{
+	LONG state = PIN_APPROVAL_IDLE;
+	LONG generation = 0;
+	char remoteAddress[sizeof(m_pendingPinRemote)] = { 0 };
+	char pin[sizeof(m_pendingPinCode)] = { 0 };
+
+	if (m_mutexPinApproval != NULL &&
+		WaitForSingleObject(m_mutexPinApproval, INFINITE) == WAIT_OBJECT_0) {
+		if (m_pinApprovalState == PIN_APPROVAL_PREPARING_CODE &&
+			GetTickCount() - m_pinPrivacyDelayStart >= PIN_PRIVACY_DELAY_MS) {
+			m_pinApprovalState = PIN_APPROVAL_SHOWING_CODE;
+			m_pinPrivacyDelayStart = 0;
+			// Capture exclusion has now been active for a full second. Reopen the
+			// dialog and show the real PIN locally while exclusion remains active.
+			m_imgui.RequestPinApprovalPopup(false);
+			SetEvent(m_eventPinApproval);
+		}
+		state = m_pinApprovalState;
+		generation = m_pinApprovalGeneration;
+		strncpy_s(remoteAddress, sizeof(remoteAddress), m_pendingPinRemote, _TRUNCATE);
+		strncpy_s(pin, sizeof(pin), m_pendingPinCode, _TRUNCATE);
+		ReleaseMutex(m_mutexPinApproval);
+	}
+
+	bool awaitingApproval = state == PIN_APPROVAL_WAITING;
+	bool preparingPin = state == PIN_APPROVAL_PREPARING_CODE;
+	bool showPin = state == PIN_APPROVAL_SHOWING_CODE;
+	bool captureProtectionFailed = state == PIN_APPROVAL_CAPTURE_FAILED;
+	if ((awaitingApproval || preparingPin || showPin || captureProtectionFailed) &&
+		generation != lastGeneration) {
+		m_imgui.RequestPinApprovalPopup();
+		lastGeneration = generation;
+	}
+	if (state == PIN_APPROVAL_IDLE && m_pinCaptureExclusionActive) {
+		// Release only after this PIN-free frame has been presented. Removing
+		// exclusion now could let capture software sample the previous PIN frame.
+		m_pinCaptureExclusionReleasePending = true;
+	}
+
+	EPinApprovalResult result = m_imgui.RenderPinApprovalPopup(remoteAddress, pin,
+		awaitingApproval, preparingPin, showPin, captureProtectionFailed);
+	if (result == PIN_APPROVAL_NO_ACTION || m_mutexPinApproval == NULL ||
+		m_eventPinApproval == NULL ||
+		WaitForSingleObject(m_mutexPinApproval, INFINITE) != WAIT_OBJECT_0) {
+		return;
+	}
+
+	if (result == PIN_APPROVAL_ALLOW && m_pinApprovalState == PIN_APPROVAL_WAITING &&
+		m_pinApprovalGeneration == generation) {
+		if (m_imgui.ShouldProtectPinFromCapture()) {
+			if (m_cleanFeed.SetTemporaryMainWindowCaptureExclusion(true)) {
+				m_pinCaptureExclusionActive = true;
+				m_pinCaptureExclusionReleasePending = false;
+				m_pinApprovalState = PIN_APPROVAL_PREPARING_CODE;
+				m_pinPrivacyDelayStart = GetTickCount();
+			} else {
+				m_pinApprovalState = PIN_APPROVAL_CAPTURE_FAILED;
+				m_pinPrivacyDelayStart = 0;
+			}
+		} else {
+			m_pinApprovalState = PIN_APPROVAL_SHOWING_CODE;
+			SetEvent(m_eventPinApproval);
+		}
+	} else if ((result == PIN_APPROVAL_DENY && m_pinApprovalState == PIN_APPROVAL_WAITING) ||
+		(result == PIN_APPROVAL_DISMISS &&
+			(m_pinApprovalState == PIN_APPROVAL_PREPARING_CODE ||
+			 m_pinApprovalState == PIN_APPROVAL_SHOWING_CODE ||
+			 m_pinApprovalState == PIN_APPROVAL_CAPTURE_FAILED))) {
+		m_pinApprovalState = PIN_APPROVAL_IDLE;
+		m_pinPrivacyDelayStart = 0;
+		if (m_pinCaptureExclusionActive) {
+			m_pinCaptureExclusionReleasePending = true;
+		}
+		SecureZeroMemory(m_pendingPinRemote, sizeof(m_pendingPinRemote));
+		SecureZeroMemory(m_pendingPinCode, sizeof(m_pendingPinCode));
+		SetEvent(m_eventPinApproval);
+	}
+	ReleaseMutex(m_mutexPinApproval);
 }
 
 void CSDLPlayer::setServerName(const char* serverName)
@@ -390,6 +670,9 @@ void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 {
 	if (InterlockedCompareExchange(&m_shuttingDown, 0, 0) != 0) {
 		return;
+	}
+	if (connected) {
+		cancelPinApproval();
 	}
 
 	SConnectionStateChange* change = new (std::nothrow) SConnectionStateChange();
@@ -425,6 +708,7 @@ void CSDLPlayer::stopServerForShutdown()
 	// Block new callback payloads before stopping their producer, then remove any
 	// payload already queued after the render thread's final event poll.
 	InterlockedExchange(&m_shuttingDown, 1);
+	cancelPinApproval();
 	m_server.stop();
 	if (SDL_WasInit(SDL_INIT_VIDEO) != 0) {
 		SDL_FilterEvents(KeepNonConnectionStateEvents, NULL);
@@ -439,6 +723,11 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 		}
 		return;
 	}
+	if (m_pinCaptureExclusionActive) {
+		// Connection completion/cancellation retires the PIN. Keep exclusion
+		// through the next PIN-free presentation before removing it.
+		m_pinCaptureExclusionReleasePending = true;
+	}
 
 	// This method only runs on the SDL thread. Retire every staged and displayed
 	// pixel before changing session ownership so reconnecting at the same source
@@ -447,6 +736,9 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 
 	if (m_bConnected && !connected) {
 		// Transitioning from connected to disconnected
+		setPictureInPictureMode(false);
+		m_cleanFeed.Hide();
+		setCapturePrivacyMode(false);
 		m_bDisconnecting = true;
 		m_bShowPerfGraphs = false;
 		m_dwDisconnectStartTime = GetTickCount();
@@ -570,11 +862,16 @@ void CSDLPlayer::loopEvents()
 
 	EQualityPreset lastQualityPreset = (EQualityPreset)-1;  // Force initial preset application
 
-	// Device name change debounce (restart server 1.5s after user stops typing)
-	char lastDeviceName[256] = { 0 };
-	strncpy_s(lastDeviceName, sizeof(lastDeviceName), m_serverName, _TRUNCATE);
-	DWORD nameChangeTime = 0;
-	bool namePendingRestart = false;
+	// Receiver name and PIN-policy changes restart Bonjour only after typing settles.
+	// The pending change is held while a device is connected, then applied as
+	// soon as the receiver is idle so an active stream is never interrupted.
+	char pendingServerName[256] = { 0 };
+	bool pendingPinEnabled = m_imgui.IsAirPlayPinEnabled();
+	strncpy_s(pendingServerName, sizeof(pendingServerName), m_serverName, _TRUNCATE);
+	DWORD receiverSettingsChangeTime = 0;
+	bool receiverSettingsPendingRestart = false;
+	bool activePinEnabled = pendingPinEnabled;
+	LONG lastPinApprovalGeneration = 0;
 
 	// Initialize cursor hide timer
 	m_lastMouseMoveTime = GetTickCount();
@@ -588,6 +885,13 @@ void CSDLPlayer::loopEvents()
 
 		// Process all pending events
 		while (SDL_PollEvent(&event)) {
+			if (IsEventForDifferentWindow(event,
+				m_window != NULL ? SDL_GetWindowID(m_window) : 0)) {
+				// The clean-feed target is intentionally a separate SDL window. It
+				// must never feed input or resize notifications into the UI window.
+				continue;
+			}
+
 			// Forward SDL2 events to ImGui first
 			m_imgui.ProcessEvent(&event);
 
@@ -622,11 +926,16 @@ void CSDLPlayer::loopEvents()
 			bool globalShortcut = false;
 			if (event.type == SDL_KEYUP) {
 				SDL_Keycode key = event.key.keysym.sym;
+				SDL_Keymod modifiers = (SDL_Keymod)event.key.keysym.mod;
 				bool hasCommandModifier = (event.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) != 0;
-				if (key == SDLK_F1 && m_bConnected) {
+				bool privacyShortcut = key == SDLK_h && m_bConnected &&
+					(modifiers & KMOD_CTRL) != 0 && (modifiers & KMOD_SHIFT) != 0;
+				if (privacyShortcut) {
+					globalShortcut = true;
+				} else if (key == SDLK_F1 && m_bConnected) {
 					globalShortcut = true;
 				} else if (!m_imgui.WantTextInput() && !hasCommandModifier &&
-					(key == SDLK_ESCAPE || key == SDLK_f || key == SDLK_r ||
+					(key == SDLK_ESCAPE || key == SDLK_f || key == SDLK_p || key == SDLK_r ||
 						(key == SDLK_h && m_bConnected))) {
 					globalShortcut = true;
 				}
@@ -652,6 +961,7 @@ void CSDLPlayer::loopEvents()
 								m_videoTexture = NULL;
 							}
 							m_videoTextureHasFrame = false;
+							m_cleanFeed.InvalidateVideoTexture();
 							m_videoWidth = width;
 							m_videoHeight = height;
 						}
@@ -694,8 +1004,11 @@ void CSDLPlayer::loopEvents()
 
 						// Fit on the monitor that currently owns the window while retaining
 						// the user's chosen window center whenever the usable bounds allow it.
-						if (!m_bFullscreen) {
+						if (!m_bFullscreen && !m_bPictureInPicture &&
+							!m_imgui.IsScreenCastEnabled()) {
 							resizeWindowForVideo((int)width, (int)height);
+						} else if (m_bPictureInPicture) {
+							resizePictureInPictureToAspect();
 						}
 
 						// Calculate display rect for the new video
@@ -705,6 +1018,7 @@ void CSDLPlayer::loopEvents()
 						// window-resize reset. Initialize all planes before the texture is
 						// ever eligible for drawing, otherwise that cached binding is green.
 						recreateVideoTexture();
+						recreateCleanFeedTexture();
 
 						m_bResizing = false;
 					}
@@ -741,8 +1055,12 @@ void CSDLPlayer::loopEvents()
 						m_bLeftButtonDown = false;
 						m_bPanMoved = false;
 						m_leftClickCount = 0;
+						m_bMainWindowMinimized = false;
 						m_windowWidth = newW;
 						m_windowHeight = newH;
+						if (m_bPictureInPicture) {
+							applyPictureInPictureWindowShape();
+						}
 						// Recalculate even when a programmatic resize pre-populated the
 						// cached size; the renderer output is authoritative only now.
 						calculateDisplayRect();
@@ -750,6 +1068,24 @@ void CSDLPlayer::loopEvents()
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_EXPOSED) {
 					// Window exposed - will be redrawn in the render loop
+				}
+				else if (event.window.event == SDL_WINDOWEVENT_CLOSE) {
+					// SDL2 delivers a close request as a window event. Re-queue the
+					// existing quit path so settings and clean-feed resources are
+					// consistently released before the main HWND is destroyed.
+					SDL_Event quitEvent = {};
+					quitEvent.type = SDL_QUIT;
+					SDL_PushEvent(&quitEvent);
+				}
+				else if (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
+					event.window.event == SDL_WINDOWEVENT_HIDDEN) {
+					m_bMainWindowMinimized = true;
+					m_cleanFeed.Hide();
+				}
+				else if (event.window.event == SDL_WINDOWEVENT_RESTORED ||
+					event.window.event == SDL_WINDOWEVENT_MAXIMIZED ||
+					event.window.event == SDL_WINDOWEVENT_SHOWN) {
+					m_bMainWindowMinimized = false;
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
 					stopPanning();
@@ -780,13 +1116,24 @@ void CSDLPlayer::loopEvents()
 				}
 				case SDLK_F1: {
 					// F1 toggles performance graphs overlay
-					if (m_bConnected) {
+					if (m_bConnected && !m_bPictureInPicture) {
 						m_bShowPerfGraphs = !m_bShowPerfGraphs;
 					}
 					break;
 				}
-				case SDLK_h: {
+				case SDLK_p: {
 					if (!hasCommandModifier && m_bConnected) {
+						setPictureInPictureMode(!m_bPictureInPicture);
+					}
+					break;
+				}
+				case SDLK_h: {
+					bool privacyShortcut = m_bConnected &&
+						(event.key.keysym.mod & KMOD_CTRL) != 0 &&
+						(event.key.keysym.mod & KMOD_SHIFT) != 0;
+					if (privacyShortcut) {
+						setCapturePrivacyMode(!m_capturePrivacyActive);
+					} else if (!hasCommandModifier && m_bConnected) {
 						// Diagnostics and controls are mutually exclusive. H returns to
 						// controls from diagnostics, then toggles controls normally.
 						if (m_bShowPerfGraphs) {
@@ -802,7 +1149,8 @@ void CSDLPlayer::loopEvents()
 					// R rotates video 90 degrees clockwise
 					if (!hasCommandModifier) {
 						m_rotationAngle = (m_rotationAngle + 90) % 360;
-						calculateDisplayRect();
+						if (m_bPictureInPicture) resizePictureInPictureToAspect();
+						else calculateDisplayRect();
 					}
 					break;
 				}
@@ -920,6 +1268,7 @@ void CSDLPlayer::loopEvents()
 					m_videoTextureHasFrame = false;
 					InterlockedExchange(&m_yuvReady, 1);
 				}
+				m_cleanFeed.HandleRendererReset();
 				break;
 			}
 			case SDL_RENDER_DEVICE_RESET: {
@@ -927,7 +1276,9 @@ void CSDLPlayer::loopEvents()
 				// Retire backend resources in their owning ImGui context before retrying.
 				m_imgui.RecreateRendererDeviceObjects();
 				m_videoTextureHasFrame = false;
+				m_cleanFeed.HandleRendererReset();
 				recreateVideoTexture();
+				recreateCleanFeedTexture();
 				break;
 			}
 			case SDL_MOUSEWHEEL: {
@@ -985,6 +1336,10 @@ void CSDLPlayer::loopEvents()
 			calculateDisplayRect();
 		}
 
+		// The ImGui settings are persisted and may have changed on the previous
+		// frame. Keep the companion surface and main-window affinity in sync.
+		syncScreenCastOutput();
+
 		// Handle disconnect transition (show black screen briefly)
 		if (m_bDisconnecting) {
 			DWORD elapsed = GetTickCount() - m_dwDisconnectStartTime;
@@ -993,22 +1348,43 @@ void CSDLPlayer::loopEvents()
 			}
 		}
 
-		// Check if device name changed (debounced restart)
+		// Apply receiver identity/security changes together. The PIN itself is
+		// generated in memory on every restart and is never persisted.
 		{
 			const char* currentName = m_imgui.GetDeviceName();
-			const char* checkName = (currentName && strlen(currentName) > 0) ? currentName : m_serverName;
-			if (strcmp(checkName, lastDeviceName) != 0) {
-				// Name changed — start/reset debounce timer
-				strncpy_s(lastDeviceName, sizeof(lastDeviceName), checkName, _TRUNCATE);
-				nameChangeTime = GetTickCount();
-				namePendingRestart = true;
+			const char* desiredName = (currentName && currentName[0] != '\0')
+				? currentName : m_serverName;
+			bool desiredPinEnabled = m_imgui.IsAirPlayPinEnabled();
+			bool settingsDiffer = strcmp(desiredName, m_serverName) != 0 ||
+				desiredPinEnabled != activePinEnabled;
+
+			if (!settingsDiffer) {
+				receiverSettingsPendingRestart = false;
+			} else if (!receiverSettingsPendingRestart ||
+				strcmp(desiredName, pendingServerName) != 0 ||
+				desiredPinEnabled != pendingPinEnabled) {
+				strncpy_s(pendingServerName, sizeof(pendingServerName), desiredName, _TRUNCATE);
+				pendingPinEnabled = desiredPinEnabled;
+				receiverSettingsChangeTime = GetTickCount();
+				receiverSettingsPendingRestart = true;
 			}
-			if (namePendingRestart && (GetTickCount() - nameChangeTime) >= 1500) {
-				// 1.5s since last change — restart server with new name
-				namePendingRestart = false;
-				if (!m_bConnected) {
-					setServerName(lastDeviceName);
-					m_server.restart(m_serverName);
+
+			if (receiverSettingsPendingRestart && !m_bConnected &&
+				GetTickCount() - receiverSettingsChangeTime >= 1000) {
+				setServerName(pendingServerName);
+				cancelPinApproval();
+				bool pinReady = !pendingPinEnabled || generateSessionAirPlayPin();
+				if (!pinReady) {
+					printf("Could not generate the AirPlay session PIN\n");
+					receiverSettingsPendingRestart = false;
+				} else {
+					if (!pendingPinEnabled) {
+						SecureZeroMemory(m_sessionAirPlayPin, sizeof(m_sessionAirPlayPin));
+					}
+					m_server.restart(m_serverName,
+						pendingPinEnabled ? m_sessionAirPlayPin : NULL);
+					activePinEnabled = pendingPinEnabled;
+					receiverSettingsPendingRestart = false;
 				}
 			}
 		}
@@ -1034,6 +1410,8 @@ void CSDLPlayer::loopEvents()
 			// Recreate texture with new filter mode (hint only applies at texture creation)
 			if (m_videoTexture != NULL && m_videoWidth > 0 && m_videoHeight > 0) {
 				recreateVideoTexture();
+				m_cleanFeed.InvalidateVideoTexture();
+				recreateCleanFeedTexture();
 			}
 		}
 
@@ -1090,6 +1468,14 @@ void CSDLPlayer::loopEvents()
 						frameArrivalQpc = 0;
 					} else {
 						m_videoTextureHasFrame = true;
+						// Clean-feed failures are deliberately isolated: the receiver must
+						// keep playing even if OBS output needs to recreate a texture.
+						if (m_cleanFeed.IsEnabled()) {
+							m_cleanFeed.UploadYUV(m_videoWidth, m_videoHeight,
+								m_yuvBuffer[readIdx][0], m_yuvPitch[0],
+								m_yuvBuffer[readIdx][1], m_yuvPitch[1],
+								m_yuvBuffer[readIdx][2], m_yuvPitch[2]);
+						}
 						InterlockedExchange(&m_yuvReady, 0);
 						m_lastFrameTime = GetTickCount();
 
@@ -1123,17 +1509,38 @@ void CSDLPlayer::loopEvents()
 			}
 		}
 
+		// A release requested before this UI frame may run after it is presented.
+		// A release requested by a button during this frame waits for the next one,
+		// because ImGui draw data for the closing PIN popup may still contain digits.
+		bool releasePinCaptureAfterPresent = m_pinCaptureExclusionReleasePending;
+
 		// 4. Render ImGui overlay on top
 		m_imgui.NewFrame();
 		if (m_bConnected) {
-			// Controls and diagnostics are mutually exclusive so the cast remains visible.
-			if (!m_bShowPerfGraphs) {
+			if (m_bPictureInPicture) {
+				bool exitPictureInPicture = false;
+				m_imgui.RenderPictureInPictureControls(&exitPictureInPicture);
+				if (exitPictureInPicture) {
+					setPictureInPictureMode(false);
+				}
+			} else if (!m_bShowPerfGraphs) {
+				// Controls and diagnostics are mutually exclusive so the cast remains visible.
 				bool resetView = false;
 				bool rotateView = false;
+				bool toggleCapturePrivacy = false;
+				bool togglePictureInPicture = false;
 				m_imgui.RenderOverlay(m_serverName, m_bConnected, m_connectedDeviceName,
 					m_videoWidth, m_videoHeight, m_displayFPS, m_currentBitrateMbps,
 					m_totalFrames, m_droppedFrames, m_zoomLevel, m_rotationAngle,
-					&resetView, &rotateView);
+					&resetView, &rotateView, m_capturePrivacyActive, &toggleCapturePrivacy,
+					m_cleanFeed.IsCaptureExclusionAvailable(), m_cleanFeed.IsReady(),
+					m_bPictureInPicture, &togglePictureInPicture);
+				if (toggleCapturePrivacy) {
+					setCapturePrivacyMode(!m_capturePrivacyActive);
+				}
+				if (togglePictureInPicture) {
+					setPictureInPictureMode(true);
+				}
 				if (rotateView) {
 					m_rotationAngle = (m_rotationAngle + 90) % 360;
 					calculateDisplayRect();
@@ -1158,6 +1565,7 @@ void CSDLPlayer::loopEvents()
 			// Disconnected - show home screen
 			m_imgui.RenderHomeScreen(m_serverName, m_server.isRunning());
 		}
+		renderPinApprovalPopup(lastPinApprovalGeneration);
 
 		// 4b. Render performance graphs if F1 toggled on
 		if (m_bShowPerfGraphs && m_bConnected) {
@@ -1198,11 +1606,38 @@ void CSDLPlayer::loopEvents()
 			m_imgui.RenderPerfGraphs(perf, &m_bShowPerfGraphs);
 		}
 
+		// Capture-only privacy keeps the local receiver visible while forcing the
+		// separate clean-feed capture target to a safe black frame.
+		if (m_cleanFeed.IsEnabled()) {
+			int renderWidth = m_windowWidth;
+			int renderHeight = m_windowHeight;
+			if (m_renderer != NULL) {
+				int outputWidth = 0;
+				int outputHeight = 0;
+				if (SDL_GetRendererOutputSize(m_renderer, &outputWidth, &outputHeight) == 0 &&
+					outputWidth > 0 && outputHeight > 0) {
+					renderWidth = outputWidth;
+					renderHeight = outputHeight;
+				}
+			}
+			m_cleanFeed.Render(m_displayRect, calculateScreenCastCaptureBounds(),
+				renderWidth, renderHeight, m_rotationAngle,
+				m_bConnected, m_bWindowVisible, m_bMainWindowMinimized,
+				m_capturePrivacyActive);
+		}
+
 		// ImGui::Render() + GPU draw via SDL2Renderer backend
 		m_imgui.Render();
 
 		// 5. Present (no VSync - immediate display for lowest latency)
 		SDL_RenderPresent(m_renderer);
+		if (releasePinCaptureAfterPresent) {
+			// The currently presented frame contains no PIN, so capture exclusion
+			// can now be removed without exposing a retained PIN frame.
+			m_cleanFeed.SetTemporaryMainWindowCaptureExclusion(false);
+			m_pinCaptureExclusionActive = false;
+			m_pinCaptureExclusionReleasePending = false;
+		}
 
 		// 6. Accumulate performance metrics, write to circular buffer every 1 second
 		{
@@ -1450,7 +1885,9 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 
 	// Update statistics
 	m_totalFrames++;
-	m_totalBytes += data->dataTotalLen;
+	// dataTotalLen is post-decode YUV memory (roughly 1.5 bytes per pixel),
+	// not what crossed the network. Report the compressed H.264 payload instead.
+	m_totalBytes += data->encodedDataLen;
 
 	// Calculate FPS and bitrate (update every second)
 	DWORD currentTime = SDL_GetTicks();
@@ -1727,6 +2164,413 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 	calculateDisplayRect();
 }
 
+void CSDLPlayer::installNativeResizeHook()
+{
+	if (m_hwnd == NULL || m_originalWindowProc != NULL) {
+		return;
+	}
+
+	if (!SetPropW(m_hwnd, NATIVE_RESIZE_PLAYER_PROPERTY, (HANDLE)this)) {
+		return;
+	}
+
+	SetLastError(0);
+	LONG_PTR previous = SetWindowLongPtrW(m_hwnd, GWLP_WNDPROC,
+		(LONG_PTR)NativeResizeWindowProc);
+	if (previous == 0 && GetLastError() != 0) {
+		RemovePropW(m_hwnd, NATIVE_RESIZE_PLAYER_PROPERTY);
+		return;
+	}
+	m_originalWindowProc = (WNDPROC)previous;
+}
+
+void CSDLPlayer::removeNativeResizeHook()
+{
+	if (m_hwnd == NULL) {
+		return;
+	}
+
+	KillTimer(m_hwnd, NATIVE_RESIZE_TIMER_ID);
+	m_nativeResizeActive = false;
+	m_nativeResizeRendering = false;
+	m_lastNativeResizeRenderTime = 0;
+	if (m_originalWindowProc != NULL) {
+		SetWindowLongPtrW(m_hwnd, GWLP_WNDPROC, (LONG_PTR)m_originalWindowProc);
+		m_originalWindowProc = NULL;
+	}
+	RemovePropW(m_hwnd, NATIVE_RESIZE_PLAYER_PROPERTY);
+}
+
+void CSDLPlayer::renderDuringNativeResize()
+{
+	if (!m_nativeResizeActive || m_nativeResizeRendering || m_window == NULL ||
+		m_renderer == NULL || !m_bWindowVisible || m_bMainWindowMinimized) {
+		return;
+	}
+
+	DWORD now = GetTickCount();
+	if (m_lastNativeResizeRenderTime != 0 &&
+		now - m_lastNativeResizeRenderTime < NATIVE_RESIZE_FRAME_INTERVAL_MS) {
+		return;
+	}
+	m_lastNativeResizeRenderTime = now;
+	m_nativeResizeRendering = true;
+
+	int width = 0;
+	int height = 0;
+	SDL_GetWindowSize(m_window, &width, &height);
+	if (width > 0 && height > 0) {
+		handleLiveResize(width, height);
+		if (m_bPictureInPicture) {
+			applyPictureInPictureWindowShape();
+		}
+	}
+
+	// The normal event loop is paused by Windows during a border drag. Upload
+	// the newest decoded frame here so resizing does not turn the video into a
+	// frozen screenshot.
+	if (m_videoTexture != NULL &&
+		InterlockedCompareExchange(&m_yuvReady, 0, 0) == 1) {
+		CAutoLock oLock(m_mutexVideo, "nativeResizeUpload");
+		LONG readIdx = InterlockedCompareExchange(&m_yuvReadIdx, 0, 0);
+		if (readIdx >= 0 && readIdx <= 1 &&
+			m_yuvBuffer[readIdx][0] != NULL &&
+			m_yuvBuffer[readIdx][1] != NULL &&
+			m_yuvBuffer[readIdx][2] != NULL &&
+			SDL_UpdateYUVTexture(m_videoTexture, NULL,
+				m_yuvBuffer[readIdx][0], m_yuvPitch[0],
+				m_yuvBuffer[readIdx][1], m_yuvPitch[1],
+				m_yuvBuffer[readIdx][2], m_yuvPitch[2]) == 0) {
+			m_videoTextureHasFrame = true;
+			InterlockedExchange(&m_yuvReady, 0);
+		}
+	}
+
+	SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
+	SDL_RenderClear(m_renderer);
+	if (m_bConnected && m_videoTexture != NULL && m_videoTextureHasFrame &&
+		m_videoWidth > 0 && m_videoHeight > 0) {
+		SDL_RenderCopyEx(m_renderer, m_videoTexture, NULL, &m_displayRect,
+			(double)m_rotationAngle, NULL, SDL_FLIP_NONE);
+	}
+
+	// WM_ENTERSIZEMOVE pauses loopEvents(), so presenting only the video here
+	// would erase the ImGui home screen while the window is being dragged.
+	// Draw the same static UI layer from the native timer to keep the receiver
+	// visually stable during both moves and resizes.
+	m_imgui.NewFrame();
+	if (m_bConnected) {
+		if (m_bPictureInPicture) {
+			m_imgui.RenderPictureInPictureControls(NULL);
+		} else if (!m_bShowPerfGraphs) {
+			bool ignoredReset = false;
+			bool ignoredRotate = false;
+			m_imgui.RenderOverlay(m_serverName, m_bConnected, m_connectedDeviceName,
+				m_videoWidth, m_videoHeight, m_displayFPS, m_currentBitrateMbps,
+				m_totalFrames, m_droppedFrames, m_zoomLevel, m_rotationAngle,
+				&ignoredReset, &ignoredRotate, m_capturePrivacyActive, NULL,
+				m_cleanFeed.IsCaptureExclusionAvailable(), m_cleanFeed.IsReady());
+		}
+	} else if (m_bDisconnecting) {
+		m_imgui.RenderDisconnectMessage(m_connectedDeviceName);
+	} else {
+		m_imgui.RenderHomeScreen(m_serverName, m_server.isRunning());
+	}
+	m_imgui.Render();
+	SDL_RenderPresent(m_renderer);
+
+	m_nativeResizeRendering = false;
+}
+
+void CSDLPlayer::setCapturePrivacyMode(bool enabled)
+{
+	if (enabled && !m_bConnected) {
+		return;
+	}
+	if (m_capturePrivacyActive == enabled) {
+		return;
+	}
+
+	if (!m_cleanFeed.SetPrivacyModeMainWindowCaptureExclusion(enabled)) {
+		return;
+	}
+	m_capturePrivacyActive = enabled;
+	// Keep controls available locally so privacy can be disabled without a
+	// global hotkey. Capture software cannot see this excluded main window.
+	m_imgui.ShowOverlay();
+}
+
+double CSDLPlayer::pictureInPictureAspectRatio() const
+{
+	int width = m_videoWidth > 0 ? m_videoWidth : 16;
+	int height = m_videoHeight > 0 ? m_videoHeight : 9;
+	if (m_rotationAngle == 90 || m_rotationAngle == 270) {
+		int swap = width;
+		width = height;
+		height = swap;
+	}
+	return height > 0 ? (double)width / (double)height : 16.0 / 9.0;
+}
+
+void CSDLPlayer::applyPictureInPictureWindowShape()
+{
+	if (m_hwnd == NULL) {
+		return;
+	}
+	if (!m_bPictureInPicture) {
+		SetWindowRgn(m_hwnd, NULL, TRUE);
+		return;
+	}
+
+	RECT bounds = {};
+	if (!GetWindowRect(m_hwnd, &bounds)) {
+		return;
+	}
+
+	int width = bounds.right - bounds.left;
+	int height = bounds.bottom - bounds.top;
+	if (width <= 0 || height <= 0) {
+		return;
+	}
+
+	UINT dpi = GetDpiForWindow(m_hwnd);
+	if (dpi == 0) dpi = 96;
+	int cornerRadius = MulDiv(12, (int)dpi, 96);
+	if (cornerRadius < 6) cornerRadius = 6;
+
+	HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1,
+		cornerRadius * 2, cornerRadius * 2);
+	if (region != NULL && SetWindowRgn(m_hwnd, region, TRUE) == 0) {
+		DeleteObject(region);
+	}
+}
+
+void CSDLPlayer::constrainPictureInPictureRect(WPARAM sizingEdge, RECT* windowRect) const
+{
+	if (!m_bPictureInPicture || windowRect == NULL) {
+		return;
+	}
+
+	double aspect = pictureInPictureAspectRatio();
+	if (aspect <= 0.0) {
+		return;
+	}
+	int width = windowRect->right - windowRect->left;
+	int height = windowRect->bottom - windowRect->top;
+	if (width <= 0 || height <= 0) {
+		return;
+	}
+
+	bool leftEdge = sizingEdge == WMSZ_LEFT || sizingEdge == WMSZ_TOPLEFT ||
+		sizingEdge == WMSZ_BOTTOMLEFT;
+	bool rightEdge = sizingEdge == WMSZ_RIGHT || sizingEdge == WMSZ_TOPRIGHT ||
+		sizingEdge == WMSZ_BOTTOMRIGHT;
+	bool topEdge = sizingEdge == WMSZ_TOP || sizingEdge == WMSZ_TOPLEFT ||
+		sizingEdge == WMSZ_TOPRIGHT;
+	bool bottomEdge = sizingEdge == WMSZ_BOTTOM || sizingEdge == WMSZ_BOTTOMLEFT ||
+		sizingEdge == WMSZ_BOTTOMRIGHT;
+	bool corner = (leftEdge || rightEdge) && (topEdge || bottomEdge);
+
+	int widthFromHeight = (int)((double)height * aspect + 0.5);
+	int heightFromWidth = (int)((double)width / aspect + 0.5);
+	bool driveFromWidth = !topEdge && !bottomEdge;
+	if (corner) {
+		driveFromWidth = abs(heightFromWidth - height) <= abs(widthFromHeight - width);
+	}
+	int adjustedWidth = driveFromWidth ? width : widthFromHeight;
+	int adjustedHeight = driveFromWidth ? heightFromWidth : height;
+	int minimumWidth = aspect >= 1.0
+		? PIP_MIN_LONG_EDGE : (int)((double)PIP_MIN_LONG_EDGE * aspect + 0.5);
+	int minimumHeight = aspect >= 1.0
+		? (int)((double)PIP_MIN_LONG_EDGE / aspect + 0.5) : PIP_MIN_LONG_EDGE;
+	if (adjustedWidth < minimumWidth || adjustedHeight < minimumHeight) {
+		adjustedWidth = minimumWidth;
+		adjustedHeight = minimumHeight;
+	}
+
+	if (leftEdge) windowRect->left = windowRect->right - adjustedWidth;
+	else if (rightEdge) windowRect->right = windowRect->left + adjustedWidth;
+	else {
+		int centerX = (windowRect->left + windowRect->right) / 2;
+		windowRect->left = centerX - adjustedWidth / 2;
+		windowRect->right = windowRect->left + adjustedWidth;
+	}
+	if (topEdge) windowRect->top = windowRect->bottom - adjustedHeight;
+	else if (bottomEdge) windowRect->bottom = windowRect->top + adjustedHeight;
+	else {
+		int centerY = (windowRect->top + windowRect->bottom) / 2;
+		windowRect->top = centerY - adjustedHeight / 2;
+		windowRect->bottom = windowRect->top + adjustedHeight;
+	}
+}
+
+LRESULT CSDLPlayer::pictureInPictureHitTest(HWND window, LPARAM position) const
+{
+	RECT bounds = {};
+	if (!m_bPictureInPicture || !GetWindowRect(window, &bounds)) {
+		return HTCLIENT;
+	}
+	int x = (int)(short)LOWORD(position) - bounds.left;
+	int y = (int)(short)HIWORD(position) - bounds.top;
+	int width = bounds.right - bounds.left;
+	int height = bounds.bottom - bounds.top;
+	int resizeGrip = GetSystemMetrics(SM_CXSIZEFRAME);
+	if (resizeGrip < 7) resizeGrip = 7;
+
+	bool left = x >= 0 && x < resizeGrip;
+	bool right = x < width && x >= width - resizeGrip;
+	bool top = y >= 0 && y < resizeGrip;
+	bool bottom = y < height && y >= height - resizeGrip;
+	if (top && left) return HTTOPLEFT;
+	if (top && right) return HTTOPRIGHT;
+	if (bottom && left) return HTBOTTOMLEFT;
+	if (bottom && right) return HTBOTTOMRIGHT;
+	if (left) return HTLEFT;
+	if (right) return HTRIGHT;
+	if (top) return HTTOP;
+	if (bottom) return HTBOTTOM;
+
+	// Keep the hover-only close button interactive. The rest of the invisible
+	// top strip acts as a caption so the frameless PiP remains draggable.
+	if (y >= resizeGrip && y < 42 && x < width - 48) {
+		return HTCAPTION;
+	}
+	return HTCLIENT;
+}
+
+void CSDLPlayer::resizePictureInPictureToAspect()
+{
+	if (!m_bPictureInPicture || m_window == NULL) {
+		return;
+	}
+	double aspect = pictureInPictureAspectRatio();
+	int minimumWidth = aspect >= 1.0
+		? PIP_MIN_LONG_EDGE : (int)((double)PIP_MIN_LONG_EDGE * aspect + 0.5);
+	int minimumHeight = aspect >= 1.0
+		? (int)((double)PIP_MIN_LONG_EDGE / aspect + 0.5) : PIP_MIN_LONG_EDGE;
+	SDL_SetWindowMinimumSize(m_window, minimumWidth, minimumHeight);
+	int oldWidth = 0;
+	int oldHeight = 0;
+	int oldX = 0;
+	int oldY = 0;
+	SDL_GetWindowSize(m_window, &oldWidth, &oldHeight);
+	SDL_GetWindowPosition(m_window, &oldX, &oldY);
+	int longEdge = oldWidth > oldHeight ? oldWidth : oldHeight;
+	if (longEdge < PIP_MIN_LONG_EDGE) longEdge = PIP_MIN_LONG_EDGE;
+	int targetWidth = longEdge;
+	int targetHeight = (int)((double)targetWidth / aspect + 0.5);
+	if (aspect < 1.0) {
+		targetHeight = longEdge;
+		targetWidth = (int)((double)targetHeight * aspect + 0.5);
+	}
+	SDL_SetWindowSize(m_window, targetWidth, targetHeight);
+	SDL_GetWindowSize(m_window, &targetWidth, &targetHeight);
+	SDL_SetWindowPosition(m_window,
+		oldX + (oldWidth - targetWidth) / 2,
+		oldY + (oldHeight - targetHeight) / 2);
+	m_windowWidth = targetWidth;
+	m_windowHeight = targetHeight;
+	calculateDisplayRect();
+}
+
+void CSDLPlayer::setPictureInPictureMode(bool enabled)
+{
+	if (m_window == NULL || m_bPictureInPicture == enabled ||
+		(enabled && !m_bConnected) || m_bResizing) {
+		return;
+	}
+
+	if (enabled && m_bFullscreen) {
+		toggleFullscreen();
+		if (m_bFullscreen) {
+			return;
+		}
+	}
+
+	m_bResizing = true;
+	stopPanning();
+	m_bLeftButtonDown = false;
+	m_bPanMoved = false;
+	m_leftClickCount = 0;
+
+	if (enabled) {
+		Uint32 flags = SDL_GetWindowFlags(m_window);
+		m_pipRestoreMaximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+		if (m_pipRestoreMaximized) {
+			SDL_RestoreWindow(m_window);
+		}
+		SDL_GetWindowPosition(m_window, &m_pipRestoreX, &m_pipRestoreY);
+		SDL_GetWindowSize(m_window, &m_pipRestoreW, &m_pipRestoreH);
+		if (m_pipRestoreW < 1) m_pipRestoreW = MIN_WINDOW_WIDTH;
+		if (m_pipRestoreH < 1) m_pipRestoreH = MIN_WINDOW_HEIGHT;
+
+		double aspect = pictureInPictureAspectRatio();
+		int targetWidth = PIP_LONG_EDGE;
+		int targetHeight = (int)((double)targetWidth / aspect + 0.5);
+		if (aspect < 1.0) {
+			targetHeight = PIP_LONG_EDGE;
+			targetWidth = (int)((double)targetHeight * aspect + 0.5);
+		}
+		int minimumWidth = aspect >= 1.0
+			? PIP_MIN_LONG_EDGE : (int)((double)PIP_MIN_LONG_EDGE * aspect + 0.5);
+		int minimumHeight = aspect >= 1.0
+			? (int)((double)PIP_MIN_LONG_EDGE / aspect + 0.5) : PIP_MIN_LONG_EDGE;
+
+		m_bPictureInPicture = true;
+		m_bShowPerfGraphs = false;
+		m_imgui.SetPictureInPictureMode(true);
+		SDL_SetWindowBordered(m_window, SDL_FALSE);
+		SDL_SetWindowResizable(m_window, SDL_TRUE);
+		SDL_SetWindowMinimumSize(m_window, minimumWidth, minimumHeight);
+		SDL_SetWindowAlwaysOnTop(m_window, SDL_TRUE);
+		SDL_SetWindowSize(m_window, targetWidth, targetHeight);
+		SDL_GetWindowSize(m_window, &targetWidth, &targetHeight);
+		applyPictureInPictureWindowShape();
+
+		int displayIndex = SDL_GetWindowDisplayIndex(m_window);
+		SDL_Rect usableBounds = {};
+		if (displayIndex >= 0 &&
+			SDL_GetDisplayUsableBounds(displayIndex, &usableBounds) == 0) {
+			int borderTop = 0;
+			int borderLeft = 0;
+			int borderBottom = 0;
+			int borderRight = 0;
+			SDL_GetWindowBordersSize(m_window, &borderTop, &borderLeft,
+				&borderBottom, &borderRight);
+			int outerWidth = targetWidth + borderLeft + borderRight;
+			int outerHeight = targetHeight + borderTop + borderBottom;
+			int outerX = usableBounds.x + usableBounds.w - outerWidth - PIP_EDGE_MARGIN;
+			int outerY = usableBounds.y + usableBounds.h - outerHeight - PIP_EDGE_MARGIN;
+			if (outerX < usableBounds.x) outerX = usableBounds.x;
+			if (outerY < usableBounds.y) outerY = usableBounds.y;
+			SDL_SetWindowPosition(m_window, outerX + borderLeft, outerY + borderTop);
+		}
+		SDL_SetWindowTitle(m_window, "AirPlay Receiver - Picture in Picture");
+	} else {
+		m_bPictureInPicture = false;
+		applyPictureInPictureWindowShape();
+		SDL_SetWindowAlwaysOnTop(m_window, SDL_FALSE);
+		SDL_SetWindowBordered(m_window, SDL_TRUE);
+		SDL_SetWindowResizable(m_window, SDL_TRUE);
+		m_imgui.SetPictureInPictureMode(false);
+		SDL_SetWindowPosition(m_window, m_pipRestoreX, m_pipRestoreY);
+		SDL_SetWindowSize(m_window, m_pipRestoreW, m_pipRestoreH);
+		if (m_pipRestoreMaximized) {
+			SDL_MaximizeWindow(m_window);
+		}
+		SDL_SetWindowTitle(m_window, "AirPlay Receiver");
+		m_windowedX = m_pipRestoreX;
+		m_windowedY = m_pipRestoreY;
+		m_windowedW = m_pipRestoreW;
+		m_windowedH = m_pipRestoreH;
+		m_imgui.ShowOverlay();
+	}
+
+	SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
+	calculateDisplayRect();
+	m_bResizing = false;
+}
+
 void CSDLPlayer::toggleFullscreen()
 {
 	stopPanning();
@@ -1740,6 +2584,9 @@ void CSDLPlayer::toggleFullscreen()
 
 	if (m_bResizing) {
 		return;
+	}
+	if (m_bPictureInPicture) {
+		setPictureInPictureMode(false);
 	}
 	m_bResizing = true;
 
@@ -1945,6 +2792,78 @@ bool CSDLPlayer::recreateVideoTexture()
 	return true;
 }
 
+void CSDLPlayer::recreateCleanFeedTexture()
+{
+	if (!m_cleanFeed.IsEnabled() || m_videoWidth <= 0 || m_videoHeight <= 0) {
+		return;
+	}
+
+	CAutoLock oLock(m_mutexVideo, "recreateCleanFeedTexture");
+	LONG readIdx = InterlockedCompareExchange(&m_yuvReadIdx, 0, 0);
+	if (readIdx < 0 || readIdx > 1 ||
+		m_yuvBuffer[readIdx][0] == NULL ||
+		m_yuvBuffer[readIdx][1] == NULL ||
+		m_yuvBuffer[readIdx][2] == NULL) {
+		return;
+	}
+
+	m_cleanFeed.UploadYUV(m_videoWidth, m_videoHeight,
+		m_yuvBuffer[readIdx][0], m_yuvPitch[0],
+		m_yuvBuffer[readIdx][1], m_yuvPitch[1],
+		m_yuvBuffer[readIdx][2], m_yuvPitch[2]);
+}
+
+void CSDLPlayer::syncScreenCastOutput()
+{
+	bool enabled = m_imgui.IsScreenCastEnabled();
+	m_cleanFeed.ApplySettings(enabled,
+		enabled && m_imgui.ShouldHideInterfaceFromCapture());
+	if (enabled && m_videoTextureHasFrame && !m_cleanFeed.HasVideoFrame()) {
+		recreateCleanFeedTexture();
+	}
+}
+
+SDL_Rect CSDLPlayer::calculateScreenCastCaptureBounds() const
+{
+	SDL_Rect bounds = {};
+	int renderWidth = m_windowWidth;
+	int renderHeight = m_windowHeight;
+	if (m_renderer != NULL) {
+		int outputWidth = 0;
+		int outputHeight = 0;
+		if (SDL_GetRendererOutputSize(m_renderer, &outputWidth, &outputHeight) == 0 &&
+			outputWidth > 0 && outputHeight > 0) {
+			renderWidth = outputWidth;
+			renderHeight = outputHeight;
+		}
+	}
+	if (renderWidth <= 0 || renderHeight <= 0) {
+		return bounds;
+	}
+
+	if (!m_imgui.ShouldCropCleanFeedToVideo() || m_videoWidth <= 0 || m_videoHeight <= 0) {
+		bounds.w = renderWidth;
+		bounds.h = renderHeight;
+		return bounds;
+	}
+
+	SDL_Rect visible = calculateZoomedVideoBounds();
+	int left = visible.x > 0 ? visible.x : 0;
+	int top = visible.y > 0 ? visible.y : 0;
+	int right = visible.x + visible.w;
+	int bottom = visible.y + visible.h;
+	if (right > renderWidth) right = renderWidth;
+	if (bottom > renderHeight) bottom = renderHeight;
+	if (right <= left || bottom <= top) {
+		return bounds;
+	}
+	bounds.x = left;
+	bounds.y = top;
+	bounds.w = right - left;
+	bounds.h = bottom - top;
+	return bounds;
+}
+
 void CSDLPlayer::windowToRendererCoordinates(float windowX, float windowY,
 	float& rendererX, float& rendererY) const
 {
@@ -2056,6 +2975,7 @@ void CSDLPlayer::clearSessionVideoFrame()
 {
 	CAutoLock oLock(m_mutexVideo, "clearSessionVideoFrame");
 	m_videoTextureHasFrame = false;
+	m_cleanFeed.InvalidateVideoTexture();
 	InterlockedExchange(&m_yuvReady, 0);
 	InterlockedExchange(&m_yuvWriteIdx, 0);
 	InterlockedExchange(&m_yuvReadIdx, 0);
@@ -2081,6 +3001,8 @@ void CSDLPlayer::clearSessionVideoFrame()
 
 void CSDLPlayer::unInitVideo()
 {
+	removeNativeResizeHook();
+
 	// Destroy video texture
 	if (m_videoTexture != NULL) {
 		SDL_DestroyTexture(m_videoTexture);
@@ -2099,6 +3021,10 @@ void CSDLPlayer::unInitVideo()
 	}
 	m_yuvPitch[0] = m_yuvPitch[1] = m_yuvPitch[2] = 0;
 
+	// The clean feed owns a separate renderer but must restore the main window's
+	// capture affinity before that HWND is destroyed.
+	m_cleanFeed.Shutdown();
+
 	// Shutdown ImGui before destroying renderer
 	m_imgui.Shutdown();
 
@@ -2112,6 +3038,7 @@ void CSDLPlayer::unInitVideo()
 		SDL_DestroyWindow(m_window);
 		m_window = NULL;
 	}
+	m_hwnd = NULL;
 
 	m_videoWidth = 0;
 	m_videoHeight = 0;
@@ -2341,6 +3268,7 @@ void CSDLPlayer::showWindow()
 		SDL_ShowWindow(m_window);
 		SDL_RaiseWindow(m_window);
 		m_bWindowVisible = true;
+		m_bMainWindowMinimized = false;
 		SDL_SetWindowTitle(m_window, "AirPlay Receiver");
 	}
 }
@@ -2350,6 +3278,8 @@ void CSDLPlayer::hideWindow()
 	if (m_window != NULL) {
 		SDL_HideWindow(m_window);
 		m_bWindowVisible = false;
+		m_bMainWindowMinimized = true;
+		m_cleanFeed.Hide();
 	}
 }
 

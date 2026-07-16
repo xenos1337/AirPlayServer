@@ -158,6 +158,7 @@ int FgAirplayChannel::decodeH264Data(SFgH264Data* data, const char* remoteName, 
 		int uSize = pFrame->linesize[1] * pFrame->height >> 1;
 		int vSize = pFrame->linesize[2] * pFrame->height >> 1;
 		m_sVideoFrameOri.dataTotalLen = ySize + uSize + vSize;
+		m_sVideoFrameOri.encodedDataLen = (unsigned int)data->size;
 		m_sVideoFrameOri.dataLen[0] = ySize;
 		m_sVideoFrameOri.dataLen[1] = uSize;
 		m_sVideoFrameOri.dataLen[2] = vSize;
@@ -222,6 +223,7 @@ int FgAirplayChannel::scaleH264Data(SFgVideoFrame* pSrcFrame)
 	int uSize = m_sVideoFrameScale.pitch[1] * nScreenHeight >> 1;
 	int vSize = m_sVideoFrameScale.pitch[2] * nScreenHeight >> 1;
 	m_sVideoFrameScale.dataTotalLen = ySize + uSize + vSize;
+	m_sVideoFrameScale.encodedDataLen = pSrcFrame->encodedDataLen;
 	m_sVideoFrameScale.dataLen[0] = ySize;
 	m_sVideoFrameScale.dataLen[1] = uSize;
 	m_sVideoFrameScale.dataLen[2] = vSize;

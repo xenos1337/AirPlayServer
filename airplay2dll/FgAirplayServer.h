@@ -19,7 +19,7 @@ public:
 
 	int start(const char serverName[AIRPLAY_NAME_LEN], 
 		unsigned int raopPort, unsigned int airplayPort,
-		IAirServerCallback* callback);
+		IAirServerCallback* callback, const char* password);
 	void stop();
 	float setScale(float fRatio);
 
@@ -38,6 +38,7 @@ protected:
 	static void audio_flush(void* cls, void* session, const char* remoteName, const char* remoteDeviceId);
 	static void audio_destroy(void* cls, void* session, const char* remoteName, const char* remoteDeviceId);
 	static void video_process(void* cls, h264_decode_struct* data, const char* remoteName, const char* remoteDeviceId);
+	static int pin_request(void* cls, const char* remoteAddress, const char* pin);
 	static void log_callback(void* cls, int level, const char* msg);
 
 	static void ap_video_play(void* cls, char* url, double volume, double start_pos);
@@ -60,4 +61,3 @@ protected:
 	float					m_fScaleRatio;
 	FgAirplayChannelMap		m_mapChannel;
 };
-

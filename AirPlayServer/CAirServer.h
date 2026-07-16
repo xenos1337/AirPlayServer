@@ -11,9 +11,10 @@ public:
 	~CAirServer();
 
 public:
-	void start(CSDLPlayer* pPlayer, const char* serverName = NULL);
+	void start(CSDLPlayer* pPlayer, const char* serverName = NULL,
+		const char* password = NULL);
 	void stop();
-	void restart(const char* serverName);
+	void restart(const char* serverName, const char* password = NULL);
 	bool isRunning() const { return m_pServer != NULL; }
 	float setVideoScale(float fRatio);
 
