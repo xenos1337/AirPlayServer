@@ -239,7 +239,7 @@ CImGuiManager::CImGuiManager()
 	, m_pFontPin(NULL)
 	, m_pFontMono(NULL)
 	, m_bEditingDeviceName(false)
-	, m_airPlayPinEnabled(true)
+	, m_airPlayPinEnabled(false)
 	, m_protectPinFromCapture(true)
 	, m_pinApprovalPopupRequested(false)
 	, m_overlayState(OVERLAY_LAUNCHER)
@@ -1664,9 +1664,9 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 	m_screenCastHideInterface = GetPrivateProfileIntA("ScreenCast", "HideInterface", 1, iniPath) != 0;
 	m_screenCastCropToVideo = GetPrivateProfileIntA("ScreenCast", "CropToVideo", 1, iniPath) != 0;
 
-	// Secure-by-default: the toggle is the only persisted PIN setting. The
-	// temporary four-digit PIN is generated in memory by the receiver.
-	m_airPlayPinEnabled = GetPrivateProfileIntA("Security", "RequirePin", 1, iniPath) != 0;
+	// PIN protection is opt-in. The temporary four-digit PIN is generated in
+	// memory by the receiver and is never persisted.
+	m_airPlayPinEnabled = GetPrivateProfileIntA("Security", "RequirePin", 0, iniPath) != 0;
 	m_protectPinFromCapture = GetPrivateProfileIntA("Security", "HidePin", 1, iniPath) != 0;
 
 	// Load the three-state overlay setting. Preserve an explicit legacy hidden

@@ -13,7 +13,9 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include <assert.h>
 
 #include "http_request.h"
@@ -25,6 +27,7 @@ struct http_request_s {
 
 	const char *method;
 	char *url;
+	char protocol[32];
 
 	char **headers;
 	int headers_size;
@@ -129,8 +132,25 @@ on_message_complete(http_parser *parser)
 	http_request_t *request = parser->data;
 
 	request->method = http_method_str(request->parser.method);
+	snprintf(request->protocol, sizeof(request->protocol), "%s/%u.%u",
+		request->parser.is_rtsp ? "RTSP" : "HTTP",
+		(unsigned int)request->parser.http_major,
+		(unsigned int)request->parser.http_minor);
 	request->complete = 1;
 	return 0;
+}
+
+static int
+header_name_equals(const char *left, const char *right)
+{
+	while (*left != '\0' && *right != '\0') {
+		if (tolower((unsigned char)*left) != tolower((unsigned char)*right)) {
+			return 0;
+		}
+		++left;
+		++right;
+	}
+	return *left == *right;
 }
 
 http_request_t *
@@ -226,6 +246,13 @@ http_request_get_url(http_request_t *request)
 }
 
 const char *
+http_request_get_protocol(http_request_t *request)
+{
+	assert(request);
+	return request->protocol[0] != '\0' ? request->protocol : NULL;
+}
+
+const char *
 http_request_get_header(http_request_t *request, const char *name)
 {
 	int i;
@@ -233,7 +260,7 @@ http_request_get_header(http_request_t *request, const char *name)
 	assert(request);
 
 	for (i=0; i<request->headers_size; i+=2) {
-		if (!strcmp(request->headers[i], name)) {
+		if (header_name_equals(request->headers[i], name)) {
 			return request->headers[i+1];
 		}
 	}

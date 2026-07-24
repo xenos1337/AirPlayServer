@@ -329,6 +329,9 @@ struct http_parser {
    */
   unsigned int upgrade : 1;
 
+  /* Set for RTSP request lines so callers can mirror the request protocol. */
+  unsigned int is_rtsp : 1;
+
   /** PUBLIC **/
   void *data; /* A pointer to get hook to the "connection" or "socket" object */
 };

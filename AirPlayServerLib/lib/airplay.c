@@ -290,6 +290,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	airplay_t *airplay = conn->airplay;
 
 	const char *method;
+	const char *protocol;
 	const char *cseq;
 	//const char *challenge;
 	int require_auth = 0;
@@ -299,14 +300,15 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 
 	const char * url = http_request_get_url(request);
 	method = http_request_get_method(request);
+	protocol = http_request_get_protocol(request);
 	cseq = http_request_get_header(request, "CSeq");
 
-	if (!method)
+	if (!method || !url || !protocol)
 	{
 		return;
 	}
 
-	*response = http_response_init("RTSP/1.0", 200, "OK");
+	*response = http_response_init(protocol, 200, "OK");
 	if (cseq != NULL) {
 		http_response_add_header(*response, "CSeq", cseq);
 	}
@@ -316,9 +318,6 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	const char * contentType = http_request_get_header(request, "content-type");
 	const char * m_sessionId = http_request_get_header(request, "x-apple-session-id");
 	const char * authorization = http_request_get_header(request, "Authorization");
-	if (authorization == NULL) {
-		authorization = http_request_get_header(request, "authorization");
-	}
 	const char * photoAction = http_request_get_header(request, "x-apple-assetaction");
 	const char * photoCacheId = http_request_get_header(request, "x-apple-assetkey");
 
@@ -335,7 +334,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 		if (!conn->pin_access_granted) {
 			if (!airplay_request_pin_approval(conn)) {
 				http_response_destroy(*response);
-				*response = http_response_init("HTTP/1.1", 403, "Connection Denied");
+				*response = http_response_init(protocol, 403, "Connection Denied");
 				if (cseq != NULL) {
 					http_response_add_header(*response, "CSeq", cseq);
 				}
@@ -357,7 +356,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 			snprintf(challenge, sizeof(challenge),
 				"Digest realm=\"%s\", nonce=\"%s\"", realm, conn->nonce);
 			http_response_destroy(*response);
-			*response = http_response_init("HTTP/1.1", AIRPLAY_STATUS_NEED_AUTH,
+			*response = http_response_init(protocol, AIRPLAY_STATUS_NEED_AUTH,
 				"Unauthorized");
 			if (cseq != NULL) {
 				http_response_add_header(*response, "CSeq", cseq);
@@ -402,7 +401,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	}
 	else if (!strcmp(method, "POST") && !strcmp(url, "/reverse")) {
 		http_response_destroy(*response);
-		*response = http_response_init("HTTP/1.1", 101, "Switching Protocols");
+		*response = http_response_init(protocol, 101, "Switching Protocols");
 		http_response_add_header(*response, "Upgrade", "PTTH/1.0");
 		http_response_add_header(*response, "Connection", "Upgrade");
 	}

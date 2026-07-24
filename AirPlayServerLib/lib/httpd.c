@@ -286,6 +286,12 @@ httpd_thread(void *arg)
 				httpd_remove_connection(httpd, connection);
 				continue;
 			}
+			if (ret < 0) {
+				logger_log(httpd->logger, LOGGER_INFO,
+					"Error receiving data on socket %d", connection->socket_fd);
+				httpd_remove_connection(httpd, connection);
+				continue;
+			}
 
 			/* Parse HTTP request from data read from connection */
 			http_request_add_data(connection->request, buffer, ret);
@@ -464,4 +470,3 @@ httpd_stop(httpd_t *httpd)
 
 	logger_log(httpd->logger, LOGGER_INFO, "Server socket stopped");
 }
-

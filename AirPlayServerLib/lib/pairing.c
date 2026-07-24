@@ -139,10 +139,12 @@ int
 pairing_session_check_handshake_status(pairing_session_t *session)
 {
     assert(session);
-    if (session->status != STATUS_SETUP) {
-        return -1;
-    }
-    return 0;
+	/* Pair-verify has two requests. The first advances the session from SETUP
+	 * to HANDSHAKE; the second must be allowed through to finish verification. */
+	if (session->status != STATUS_SETUP && session->status != STATUS_HANDSHAKE) {
+		return -1;
+	}
+	return 0;
 }
 
 int

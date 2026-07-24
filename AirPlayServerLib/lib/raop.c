@@ -155,10 +155,8 @@ conn_require_password(raop_conn_t *conn, http_request_t *request,
 {
 	const char *method = http_request_get_method(request);
 	const char *url = http_request_get_url(request);
+	const char *protocol = http_request_get_protocol(request);
 	const char *authorization = http_request_get_header(request, "Authorization");
-	if (authorization == NULL) {
-		authorization = http_request_get_header(request, "authorization");
-	}
 	char challenge[96];
 
 	if (conn->raop->password[0] == '\0' || conn->authenticated) {
@@ -184,13 +182,13 @@ conn_require_password(raop_conn_t *conn, http_request_t *request,
 	snprintf(challenge, sizeof(challenge),
 		"Digest realm=\"raop\", nonce=\"%s\"", conn->nonce);
 	http_response_destroy(*response);
-	*response = http_response_init("RTSP/1.0", 401, "Unauthorized");
+	*response = http_response_init(protocol != NULL ? protocol : "RTSP/1.0",
+		401, "Unauthorized");
 	if (cseq != NULL) {
 		http_response_add_header(*response, "CSeq", cseq);
 	}
 	http_response_add_header(*response, "Server", "AirTunes/845.5.1");
 	http_response_add_header(*response, "WWW-Authenticate", challenge);
-	http_response_finish(*response, NULL, 0);
 	logger_log(conn->raop->logger, LOGGER_INFO,
 		"AirPlay PIN authentication required");
 	return 0;
@@ -310,8 +308,10 @@ raop_pairpin_fail(raop_conn_t *conn, http_request_t *request,
 	http_response_t **response)
 {
 	const char *cseq = http_request_get_header(request, "CSeq");
+	const char *protocol = http_request_get_protocol(request);
 	http_response_destroy(*response);
-	*response = http_response_init("RTSP/1.0", 470, "Client Authentication Failure");
+	*response = http_response_init(protocol != NULL ? protocol : "RTSP/1.0",
+		470, "Client Authentication Failure");
 	if (cseq != NULL) {
 		http_response_add_header(*response, "CSeq", cseq);
 	}
@@ -540,6 +540,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
     logger_log(conn->raop->logger, LOGGER_DEBUG, "conn_request");
 	const char *method;
 	const char *url;
+	const char *protocol;
 	const char *cseq;
 
 	char *response_data = NULL;
@@ -547,14 +548,17 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 
 	method = http_request_get_method(request);
 	url = http_request_get_url(request);
+	protocol = http_request_get_protocol(request);
 	cseq = http_request_get_header(request, "CSeq");
-	if (!method || !cseq) {
+	if (!method || !url || !protocol) {
 		return;
 	}
 
-	*response = http_response_init("RTSP/1.0", 200, "OK");
+	*response = http_response_init(protocol, 200, "OK");
 
-	http_response_add_header(*response, "CSeq", cseq);
+	if (cseq != NULL) {
+		http_response_add_header(*response, "CSeq", cseq);
+	}
 	//http_response_add_header(*response, "Apple-Jack-Status", "connected; type=analog");
 	http_response_add_header(*response, "Server", "AirTunes/845.5.1");
 
@@ -563,6 +567,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	// capability requests must remain available so the sender can reach it.
 	if (!strcmp(method, "SETUP") &&
 		!conn_require_password(conn, request, response, cseq)) {
+		http_response_finish(*response, NULL, 0);
 		return;
 	}
 	raop_handler_t handler = NULL;
