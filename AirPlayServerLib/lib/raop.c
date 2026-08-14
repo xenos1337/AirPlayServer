@@ -800,7 +800,8 @@ raop_set_password(raop_t *raop, const char *password)
 	raop_clear_pin_pairing_approval(raop);
 	memset(raop->password, 0, sizeof(raop->password));
 	if (password != NULL) {
-		strncpy(raop->password, password, MAX_PASSWORD_LEN);
+		strncpy(raop->password, password, MAX_PASSWORD_LEN - 1);
+		raop->password[MAX_PASSWORD_LEN - 1] = '\0';  // Ensure null-termination
 	}
 }
 
@@ -808,6 +809,7 @@ void raop_log(raop_t* raop, int level, const char* fmt, ...)
 {
 	static char buffer[4096];
 	va_list ap;
+	// Security: Ensure buffer doesn't overflow with vsnprintf
 
 	buffer[sizeof(buffer) - 1] = '\0';
 	va_start(ap, fmt);

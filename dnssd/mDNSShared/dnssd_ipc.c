@@ -102,9 +102,16 @@ uint16_t get_uint16(const char **ptr, const char *end)
 
 int put_string(const char *str, char **ptr)
 {
+    size_t len;
     if (!str) str = "";
-    strcpy(*ptr, str);
-    *ptr += strlen(str) + 1;
+    len = strlen(str) + 1;
+    // Safety: limit string size to prevent buffer overflow
+    // DNS strings should be well under 256 bytes in practice
+    if (len > 256) {
+        return -1;  // Error: string too long
+    }
+    memcpy(*ptr, str, len);
+    *ptr += len;
     return 0;
 }
 

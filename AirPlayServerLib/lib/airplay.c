@@ -589,12 +589,13 @@ int airplay_start(airplay_t *airplay, unsigned short *port, const char *hwaddr,
 	memset(airplay->password, 0, sizeof(airplay->password));
 	if (password)
 	{
-		if (strlen(password) > MAX_PASSWORD_LEN)
+		if (strlen(password) >= MAX_PASSWORD_LEN)
 		{
 			return -1;
 		}
 
-		strncpy(airplay->password, password, MAX_PASSWORD_LEN);
+		strncpy(airplay->password, password, MAX_PASSWORD_LEN - 1);
+		airplay->password[MAX_PASSWORD_LEN - 1] = '\0';  // Ensure null-termination
 	}
 
 	memcpy(airplay->hwaddr, hwaddr, hwaddrlen);

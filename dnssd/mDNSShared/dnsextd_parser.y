@@ -245,9 +245,11 @@ zone_set:
 				YYABORT;
 				}
 
-			strncpy( zoneSpec->name, $2, sizeof( zoneSpec->name ) );
+			strncpy( zoneSpec->name, $2, sizeof( zoneSpec->name ) - 1 );
+			zoneSpec->name[sizeof( zoneSpec->name ) - 1] = '\0';
 			zoneSpec->type = g_zoneSpec.type;
-			strcpy( zoneSpec->key, g_zoneSpec.key );
+			strncpy( zoneSpec->key, g_zoneSpec.key, sizeof( zoneSpec->key ) - 1 );
+			zoneSpec->key[sizeof( zoneSpec->key ) - 1] = '\0';
 			zoneSpec->allowUpdate = g_zoneSpec.allowUpdate;
 			zoneSpec->allowQuery = g_zoneSpec.allowQuery;
 
@@ -267,9 +269,11 @@ zone_set:
 				YYABORT;
 				}
 
-			strncpy( zoneSpec->name, $2, sizeof( zoneSpec->name ) );
+			strncpy( zoneSpec->name, $2, sizeof( zoneSpec->name ) - 1 );
+			zoneSpec->name[sizeof( zoneSpec->name ) - 1] = '\0';
 			zoneSpec->type = g_zoneSpec.type;
-			strcpy( zoneSpec->key, g_zoneSpec.key );
+			strncpy( zoneSpec->key, g_zoneSpec.key, sizeof( zoneSpec->key ) - 1 );
+			zoneSpec->key[sizeof( zoneSpec->key ) - 1] = '\0';
 			zoneSpec->allowUpdate = g_zoneSpec.allowUpdate;
 			zoneSpec->allowQuery = g_zoneSpec.allowQuery;
 

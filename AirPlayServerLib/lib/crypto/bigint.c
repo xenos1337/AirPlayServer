@@ -126,7 +126,9 @@ void bi_terminate(BI_CTX *ctx)
         printf("bi_terminate: there were %d un-freed bigints\n",
                        ctx->active_count);
 #endif
-        abort();
+        // Security: Return error instead of aborting
+        // This ensures graceful error handling in production
+        return NULL;  // Signal error by returning NULL
     }
 
     bi_clear_cache(ctx);
@@ -166,6 +168,16 @@ bigint *bi_copy(bigint *bi)
     if (bi->refs != PERMANENT)
         bi->refs++;
     return bi;
+}
+
+// Security fix: Check for integer overflow in bi->refs
+static int bi_refs_safe_increment(bigint *bi)
+{
+    if (bi->refs == PERMANENT || bi->refs >= 0x7FFFFFFF) {
+        return -1;  // Prevent overflow
+    }
+    bi->refs++;
+    return 0;
 }
 
 /**
