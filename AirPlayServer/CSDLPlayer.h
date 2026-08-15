@@ -202,6 +202,7 @@ public:
 	void renderPinApprovalPopup(LONG& lastGeneration);
 	void resizeWindowForVideo(int width, int height);
 	void resizeWindow(int width, int height);  // Handle window resize
+	void getAdvertisedDisplaySize(unsigned int& width, unsigned int& height) const;
 
 	// Window handle for show/hide
 	HWND m_hwnd;

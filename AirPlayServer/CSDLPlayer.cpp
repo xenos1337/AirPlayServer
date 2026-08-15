@@ -33,6 +33,10 @@ namespace {
 	constexpr int PIP_LONG_EDGE = 420;
 	constexpr int PIP_MIN_LONG_EDGE = 240;
 	constexpr int PIP_EDGE_MARGIN = 24;
+	constexpr unsigned int MIN_ADVERTISED_WIDTH = 640;
+	constexpr unsigned int MIN_ADVERTISED_HEIGHT = 360;
+	constexpr unsigned int MAX_ADVERTISED_WIDTH = 7680;
+	constexpr unsigned int MAX_ADVERTISED_HEIGHT = 4320;
 	constexpr DWORD NATIVE_RESIZE_FRAME_INTERVAL_MS = 16;
 	constexpr UINT_PTR NATIVE_RESIZE_TIMER_ID = 0x41525052;
 	const wchar_t NATIVE_RESIZE_PLAYER_PROPERTY[] = L"AirPlayReceiver.NativeResizePlayer";
@@ -496,8 +500,12 @@ bool CSDLPlayer::init()
 		printf("Could not generate the AirPlay session PIN\n");
 		return false;
 	}
+	unsigned int advertisedWidth = 0;
+	unsigned int advertisedHeight = 0;
+	getAdvertisedDisplaySize(advertisedWidth, advertisedHeight);
 	m_server.start(this, strlen(m_serverName) > 0 ? m_serverName : NULL,
-		m_imgui.IsAirPlayPinEnabled() ? m_sessionAirPlayPin : NULL);
+		m_imgui.IsAirPlayPinEnabled() ? m_sessionAirPlayPin : NULL,
+		advertisedWidth, advertisedHeight);
 
 	return true;
 }
@@ -867,7 +875,8 @@ void CSDLPlayer::loopEvents()
 
 	EQualityPreset lastQualityPreset = (EQualityPreset)-1;  // Force initial preset application
 
-	// Receiver name and PIN-policy changes restart Bonjour only after typing settles.
+	// Receiver name, PIN-policy, and display changes restart the service only
+	// after editing or monitor movement settles.
 	// The pending change is held while a device is connected, then applied as
 	// soon as the receiver is idle so an active stream is never interrupted.
 	char pendingServerName[256] = { 0 };
@@ -876,6 +885,11 @@ void CSDLPlayer::loopEvents()
 	DWORD receiverSettingsChangeTime = 0;
 	bool receiverSettingsPendingRestart = false;
 	bool activePinEnabled = pendingPinEnabled;
+	unsigned int pendingDisplayWidth = 0;
+	unsigned int pendingDisplayHeight = 0;
+	getAdvertisedDisplaySize(pendingDisplayWidth, pendingDisplayHeight);
+	unsigned int activeDisplayWidth = pendingDisplayWidth;
+	unsigned int activeDisplayHeight = pendingDisplayHeight;
 	LONG lastPinApprovalGeneration = 0;
 
 	// Initialize cursor hide timer
@@ -1360,16 +1374,25 @@ void CSDLPlayer::loopEvents()
 			const char* desiredName = (currentName && currentName[0] != '\0')
 				? currentName : m_serverName;
 			bool desiredPinEnabled = m_imgui.IsAirPlayPinEnabled();
+			unsigned int desiredDisplayWidth = 0;
+			unsigned int desiredDisplayHeight = 0;
+			getAdvertisedDisplaySize(desiredDisplayWidth, desiredDisplayHeight);
 			bool settingsDiffer = strcmp(desiredName, m_serverName) != 0 ||
-				desiredPinEnabled != activePinEnabled;
+				desiredPinEnabled != activePinEnabled ||
+				desiredDisplayWidth != activeDisplayWidth ||
+				desiredDisplayHeight != activeDisplayHeight;
 
 			if (!settingsDiffer) {
 				receiverSettingsPendingRestart = false;
 			} else if (!receiverSettingsPendingRestart ||
 				strcmp(desiredName, pendingServerName) != 0 ||
-				desiredPinEnabled != pendingPinEnabled) {
+				desiredPinEnabled != pendingPinEnabled ||
+				desiredDisplayWidth != pendingDisplayWidth ||
+				desiredDisplayHeight != pendingDisplayHeight) {
 				strncpy_s(pendingServerName, sizeof(pendingServerName), desiredName, _TRUNCATE);
 				pendingPinEnabled = desiredPinEnabled;
+				pendingDisplayWidth = desiredDisplayWidth;
+				pendingDisplayHeight = desiredDisplayHeight;
 				receiverSettingsChangeTime = GetTickCount();
 				receiverSettingsPendingRestart = true;
 			}
@@ -1387,8 +1410,11 @@ void CSDLPlayer::loopEvents()
 						SecureZeroMemory(m_sessionAirPlayPin, sizeof(m_sessionAirPlayPin));
 					}
 					m_server.restart(m_serverName,
-						pendingPinEnabled ? m_sessionAirPlayPin : NULL);
+						pendingPinEnabled ? m_sessionAirPlayPin : NULL,
+						pendingDisplayWidth, pendingDisplayHeight);
 					activePinEnabled = pendingPinEnabled;
+					activeDisplayWidth = pendingDisplayWidth;
+					activeDisplayHeight = pendingDisplayHeight;
 					receiverSettingsPendingRestart = false;
 				}
 			}
@@ -2043,6 +2069,37 @@ void CSDLPlayer::initVideo(int width, int height)
 
 	// Calculate display rect (will be 0x0 until video arrives)
 	calculateDisplayRect();
+}
+
+void CSDLPlayer::getAdvertisedDisplaySize(unsigned int& width,
+	unsigned int& height) const
+{
+	if (!m_imgui.ShouldMatchReceiverMonitor()) {
+		int customWidth = m_imgui.GetCustomReceiverWidth();
+		int customHeight = m_imgui.GetCustomReceiverHeight();
+		if (customWidth < (int)MIN_ADVERTISED_WIDTH) customWidth = MIN_ADVERTISED_WIDTH;
+		if (customWidth > (int)MAX_ADVERTISED_WIDTH) customWidth = MAX_ADVERTISED_WIDTH;
+		if (customHeight < (int)MIN_ADVERTISED_HEIGHT) customHeight = MIN_ADVERTISED_HEIGHT;
+		if (customHeight > (int)MAX_ADVERTISED_HEIGHT) customHeight = MAX_ADVERTISED_HEIGHT;
+		width = (unsigned int)(customWidth & ~1);
+		height = (unsigned int)(customHeight & ~1);
+		return;
+	}
+
+	SDL_DisplayMode displayMode = {};
+	int displayIndex = m_window != NULL ? SDL_GetWindowDisplayIndex(m_window) : -1;
+	if (displayIndex >= 0 &&
+		SDL_GetCurrentDisplayMode(displayIndex, &displayMode) == 0 &&
+		displayMode.w > 0 && displayMode.h > 0) {
+		width = (unsigned int)displayMode.w;
+		height = (unsigned int)displayMode.h;
+		return;
+	}
+
+	int systemWidth = GetSystemMetrics(SM_CXSCREEN);
+	int systemHeight = GetSystemMetrics(SM_CYSCREEN);
+	width = systemWidth > 0 ? (unsigned int)systemWidth : 1920U;
+	height = systemHeight > 0 ? (unsigned int)systemHeight : 1080U;
 }
 
 void CSDLPlayer::resizeWindowForVideo(int width, int height)

@@ -57,7 +57,8 @@ FgAirplayServer::~FgAirplayServer()
 
 int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN], 
 	unsigned int raopPort, unsigned int airplayPort,
-	IAirServerCallback* callback, const char* password)
+	IAirServerCallback* callback, const char* password,
+	unsigned int displayWidth, unsigned int displayHeight)
 {
 	m_pCallback = callback;
 	const char* authPassword = (password != NULL && password[0] != '\0') ? password : NULL;
@@ -93,6 +94,7 @@ int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN],
 		raop_set_log_level(m_pRaop, RAOP_LOG_DEBUG);
 		raop_set_log_callback(m_pRaop, &log_callback, this);
 		raop_set_password(m_pRaop, authPassword);
+		raop_set_display_size(m_pRaop, displayWidth, displayHeight);
 		ret = raop_start(m_pRaop, &raop_port);
 		if (ret < 0) {
 			break;

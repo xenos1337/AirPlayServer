@@ -99,6 +99,9 @@ public:
 	const char* GetDeviceName() const;
 	bool IsAirPlayPinEnabled() const { return m_airPlayPinEnabled; }
 	bool ShouldProtectPinFromCapture() const { return m_protectPinFromCapture; }
+	bool ShouldMatchReceiverMonitor() const { return m_matchReceiverMonitor; }
+	int GetCustomReceiverWidth() const { return m_customReceiverWidth; }
+	int GetCustomReceiverHeight() const { return m_customReceiverHeight; }
 
 	// The receiver owns the PIN lifetime; ImGui only presents the approval flow.
 	void RequestPinApprovalPopup(bool notify = true);
@@ -154,6 +157,9 @@ private:
 	bool m_airPlayPinEnabled;
 	bool m_protectPinFromCapture;
 	bool m_pinApprovalPopupRequested;
+	bool m_matchReceiverMonitor;
+	int m_customReceiverWidth;
+	int m_customReceiverHeight;
 
 	// UI state
 	EOverlayState m_overlayState;

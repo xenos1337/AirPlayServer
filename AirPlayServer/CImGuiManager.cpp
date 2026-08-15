@@ -28,6 +28,10 @@ namespace {
 	const ImVec4 UI_CANVAS = ImVec4(0.045f, 0.049f, 0.055f, 1.00f);
 	const ImVec4 UI_SURFACE = ImVec4(0.060f, 0.064f, 0.071f, 0.98f);
 	const ImVec4 UI_SURFACE_RAISED = ImVec4(0.088f, 0.093f, 0.102f, 1.00f);
+	const int MIN_RECEIVER_WIDTH = 640;
+	const int MIN_RECEIVER_HEIGHT = 360;
+	const int MAX_RECEIVER_WIDTH = 7680;
+	const int MAX_RECEIVER_HEIGHT = 4320;
 
 	float Clamp01(float value)
 	{
@@ -44,6 +48,13 @@ namespace {
 	float MaxFloat(float a, float b)
 	{
 		return a > b ? a : b;
+	}
+
+	int ClampReceiverDimension(int value, int minimum, int maximum)
+	{
+		if (value < minimum) value = minimum;
+		if (value > maximum) value = maximum;
+		return value & ~1;
 	}
 
 	const char* FindFirstFont(const char* const* paths, int count)
@@ -242,6 +253,9 @@ CImGuiManager::CImGuiManager()
 	, m_airPlayPinEnabled(false)
 	, m_protectPinFromCapture(true)
 	, m_pinApprovalPopupRequested(false)
+	, m_matchReceiverMonitor(true)
+	, m_customReceiverWidth(1920)
+	, m_customReceiverHeight(1080)
 	, m_overlayState(OVERLAY_LAUNCHER)
 	, m_overlayAnchor(0.0f, 0.0f)
 	, m_overlayAnchorValid(false)
@@ -733,6 +747,53 @@ void CImGuiManager::RenderSettingsPopup()
 	m_bEditingDeviceName = ImGui::IsItemActive();
 	ImGui::TextColored(UI_TEXT_MUTED,
 		"Shown in Screen Mirroring. Changes apply automatically when disconnected.");
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+	ImGui::TextColored(UI_TEXT_SECONDARY, "AirPlay resolution");
+	int displayIndex = m_pWindow != NULL ? SDL_GetWindowDisplayIndex(m_pWindow) : -1;
+	SDL_DisplayMode displayMode = {};
+	char automaticLabel[96] = "Match receiver monitor";
+	if (displayIndex >= 0 &&
+		SDL_GetCurrentDisplayMode(displayIndex, &displayMode) == 0 &&
+		displayMode.w > 0 && displayMode.h > 0) {
+		snprintf(automaticLabel, sizeof(automaticLabel),
+			"Match receiver monitor (%d x %d)", displayMode.w, displayMode.h);
+	}
+	const char* resolutionModes[] = { automaticLabel, "Custom" };
+	int resolutionMode = m_matchReceiverMonitor ? 0 : 1;
+	ImGui::SetNextItemWidth(-1.0f);
+	if (ImGui::Combo("##ReceiverResolutionMode", &resolutionMode,
+		resolutionModes, 2)) {
+		m_matchReceiverMonitor = resolutionMode == 0;
+	}
+	ShowTooltip("Resolution macOS uses when negotiating a new mirrored display");
+	if (!m_matchReceiverMonitor) {
+		float separatorWidth = ImGui::CalcTextSize("x").x;
+		float fieldGap = ImGui::GetStyle().ItemSpacing.x;
+		float fieldWidth = (ImGui::GetContentRegionAvail().x - separatorWidth -
+			fieldGap * 2.0f) * 0.5f;
+		ImGui::SetNextItemWidth(fieldWidth);
+		ImGui::InputInt("##ReceiverWidth", &m_customReceiverWidth, 0, 0,
+			ImGuiInputTextFlags_CharsDecimal);
+		bool widthFinished = ImGui::IsItemDeactivatedAfterEdit();
+		ImGui::SameLine();
+		ImGui::TextUnformatted("x");
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(fieldWidth);
+		ImGui::InputInt("##ReceiverHeight", &m_customReceiverHeight, 0, 0,
+			ImGuiInputTextFlags_CharsDecimal);
+		bool heightFinished = ImGui::IsItemDeactivatedAfterEdit();
+		if (widthFinished || heightFinished) {
+			m_customReceiverWidth = ClampReceiverDimension(m_customReceiverWidth,
+				MIN_RECEIVER_WIDTH, MAX_RECEIVER_WIDTH);
+			m_customReceiverHeight = ClampReceiverDimension(m_customReceiverHeight,
+				MIN_RECEIVER_HEIGHT, MAX_RECEIVER_HEIGHT);
+		}
+	}
+	ImGui::TextColored(UI_TEXT_MUTED,
+		"Applied while idle. Reconnect from macOS after changing it.");
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -1671,6 +1732,14 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 	}
 	m_autoFullscreenOnConnect =
 		GetPrivateProfileIntA("General", "AutoFullscreenOnConnect", 0, iniPath) != 0;
+	m_matchReceiverMonitor =
+		GetPrivateProfileIntA("Display", "MatchReceiverMonitor", 1, iniPath) != 0;
+	m_customReceiverWidth = ClampReceiverDimension(
+		GetPrivateProfileIntA("Display", "CustomWidth", 1920, iniPath),
+		MIN_RECEIVER_WIDTH, MAX_RECEIVER_WIDTH);
+	m_customReceiverHeight = ClampReceiverDimension(
+		GetPrivateProfileIntA("Display", "CustomHeight", 1080, iniPath),
+		MIN_RECEIVER_HEIGHT, MAX_RECEIVER_HEIGHT);
 
 	// Screen-cast defaults preserve the existing receiver behavior until enabled.
 	m_screenCastEnabled = GetPrivateProfileIntA("ScreenCast", "Enabled", 0, iniPath) != 0;
@@ -1738,6 +1807,13 @@ void CImGuiManager::SaveSettings(const char* iniPath)
 	WritePrivateProfileStringA("General", "QualityPreset", buf, iniPath);
 	WritePrivateProfileStringA("General", "AutoFullscreenOnConnect",
 		m_autoFullscreenOnConnect ? "1" : "0", iniPath);
+	WritePrivateProfileStringA("Display", "MatchReceiverMonitor",
+		m_matchReceiverMonitor ? "1" : "0", iniPath);
+	char displayBuf[16];
+	sprintf_s(displayBuf, sizeof(displayBuf), "%d", m_customReceiverWidth);
+	WritePrivateProfileStringA("Display", "CustomWidth", displayBuf, iniPath);
+	sprintf_s(displayBuf, sizeof(displayBuf), "%d", m_customReceiverHeight);
+	WritePrivateProfileStringA("Display", "CustomHeight", displayBuf, iniPath);
 
 	WritePrivateProfileStringA("ScreenCast", "Enabled",
 		m_screenCastEnabled ? "1" : "0", iniPath);

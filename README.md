@@ -70,12 +70,21 @@ The app warns you at startup if Bonjour is missing or its service is not running
 - GPU texture upload and YUV to RGB conversion
 - Frame pacing for smoother playback
 - Live window resizing
+- Receiver resolution matched to a monitor or set manually
 - Automatic Bonjour service advertisement
 
 ## Use AirPlayServer
 
 1. Start AirPlayServer.
 2. Open Control Center on an iPhone or iPad, or open the AirPlay menu on a Mac.
+3. Select the Windows PC from the list.
+4. Start mirroring or playback.
+
+### Receiver resolution
+
+Open `Settings` and use `AirPlay resolution` to control the display size advertised to macOS. `Match receiver monitor` is the default: while the receiver is idle, move its window to the Windows monitor you want to match. The advertised size follows that monitor's current mode.
+
+Select `Custom` to enter an exact width and height, such as `1920 x 1080` or `2560 x 1440`. Resolution changes are applied when the receiver is idle. Stop and reconnect Screen Mirroring on the Mac to negotiate the new size; an active stream is never interrupted.
 
 ### Debug logging
 
@@ -86,8 +95,6 @@ directory if `LOCALAPPDATA` is unavailable). The log includes startup and
 shutdown, connection/device identifiers, AirPlay protocol messages, playback
 and volume callbacks, thread IDs, and unhandled exception details. Debug mode
 is opt-in and does not create log files during normal launches.
-3. Select the Windows PC from the list.
-4. Start mirroring or playback.
 
 ### Optional AirPlay PIN
 

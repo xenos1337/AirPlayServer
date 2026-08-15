@@ -31,6 +31,10 @@ public:
 AIRPLAYSERVER_API void* fgServerStart(const char serverName[AIRPLAY_NAME_LEN], 
 	unsigned int raopPort, unsigned int airplayPort,
 	IAirServerCallback* callback, const char* password);
+AIRPLAYSERVER_API void* fgServerStartWithDisplay(const char serverName[AIRPLAY_NAME_LEN],
+	unsigned int raopPort, unsigned int airplayPort,
+	IAirServerCallback* callback, const char* password,
+	unsigned int displayWidth, unsigned int displayHeight);
 AIRPLAYSERVER_API void fgServerStop(void* handle);
 
 AIRPLAYSERVER_API float fgServerScale(void* handle, float fRatio);

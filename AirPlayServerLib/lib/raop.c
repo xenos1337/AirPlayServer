@@ -56,6 +56,8 @@ struct raop_s {
 	int pin_pairing_remotelen;
 	unsigned char paired_client_keys[10][PINPAIR_ED25519_KEY_SIZE];
 	int paired_client_key_count;
+	unsigned int display_width;
+	unsigned int display_height;
 
     unsigned short port;
 };
@@ -81,6 +83,58 @@ struct raop_conn_s {
 typedef struct raop_conn_s raop_conn_t;
 
 #include "raop_handlers.h"
+
+/* The legacy binary /info template contains a fixed 3440x1440 display. Rewrite
+ * its display dictionary before it reaches the sender so mirroring negotiation
+ * uses the resolution selected by the receiver. */
+static void
+raop_apply_display_size(raop_t *raop, char **response_data, int *response_datalen)
+{
+	plist_t info_node = NULL;
+	plist_t displays_node;
+	plist_t display_node;
+	char *updated_data = NULL;
+	uint32_t updated_len = 0;
+
+	if (raop == NULL || response_data == NULL || *response_data == NULL ||
+		response_datalen == NULL || *response_datalen <= 0) {
+		return;
+	}
+
+	plist_from_bin(*response_data, (uint32_t)*response_datalen, &info_node);
+	if (info_node == NULL) {
+		return;
+	}
+
+	displays_node = plist_dict_get_item(info_node, "displays");
+	display_node = displays_node != NULL
+		? plist_array_get_item(displays_node, 0) : NULL;
+	if (display_node != NULL) {
+		plist_dict_set_item(display_node, "width",
+			plist_new_uint(raop->display_width));
+		plist_dict_set_item(display_node, "widthPixels",
+			plist_new_uint(raop->display_width));
+		plist_dict_set_item(display_node, "height",
+			plist_new_uint(raop->display_height));
+		plist_dict_set_item(display_node, "heightPixels",
+			plist_new_uint(raop->display_height));
+		plist_dict_set_item(display_node, "maxFPS",
+			plist_new_uint(GLOBAL_DISPLAY_MAX_FPS));
+		plist_dict_set_item(display_node, "refreshRate",
+			plist_new_real(1.0 / (double)GLOBAL_DISPLAY_REFRESH_RATE));
+
+		plist_to_bin(info_node, &updated_data, &updated_len);
+	}
+	plist_free(info_node);
+
+	if (updated_data != NULL && updated_len > 0 && updated_len <= INT_MAX) {
+		free(*response_data);
+		*response_data = updated_data;
+		*response_datalen = (int)updated_len;
+	} else if (updated_data != NULL) {
+		free(updated_data);
+	}
+}
 
 static void *
 conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remote, int remotelen)
@@ -630,6 +684,10 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	}
 	if (handler != NULL) {
 		handler(conn, request, *response, &response_data, &response_datalen);
+		if (handler == &raop_handler_info) {
+			raop_apply_display_size(conn->raop, &response_data,
+				&response_datalen);
+		}
 		if (!strcmp(method, "POST") && !strcmp(url, "/pair-verify") &&
 			conn->raop->password[0] != '\0' &&
 			pairing_session_is_finished(conn->pairing)) {
@@ -725,6 +783,8 @@ raop_init(int max_clients, raop_callbacks_t *callbacks)
 	memcpy(&raop->callbacks, callbacks, sizeof(raop_callbacks_t));
 	raop->pairing = pairing;
 	raop->httpd = httpd;
+	raop->display_width = GLOBAL_DISPLAY_WIDTH;
+	raop->display_height = GLOBAL_DISPLAY_HEIGHT;
 	return raop;
 }
 
@@ -803,6 +863,14 @@ raop_set_password(raop_t *raop, const char *password)
 		strncpy(raop->password, password, MAX_PASSWORD_LEN - 1);
 		raop->password[MAX_PASSWORD_LEN - 1] = '\0';  // Ensure null-termination
 	}
+}
+
+void
+raop_set_display_size(raop_t *raop, unsigned int width, unsigned int height)
+{
+	assert(raop);
+	raop->display_width = width > 0 ? width : GLOBAL_DISPLAY_WIDTH;
+	raop->display_height = height > 0 ? height : GLOBAL_DISPLAY_HEIGHT;
 }
 
 void raop_log(raop_t* raop, int level, const char* fmt, ...)

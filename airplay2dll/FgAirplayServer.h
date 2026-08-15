@@ -19,7 +19,8 @@ public:
 
 	int start(const char serverName[AIRPLAY_NAME_LEN], 
 		unsigned int raopPort, unsigned int airplayPort,
-		IAirServerCallback* callback, const char* password);
+		IAirServerCallback* callback, const char* password,
+		unsigned int displayWidth, unsigned int displayHeight);
 	void stop();
 	float setScale(float fRatio);
 
