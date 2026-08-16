@@ -1,6 +1,7 @@
 # Visual Studio / C++ .gitignore
 
 # Build results
+AirPlayServer/lib
 /AirPlay2-Win-x64.zip
 [Dd]ebug/
 [Dd]ebugPublic/
