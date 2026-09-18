@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
-This is a Visual Studio 2022 (v143 toolset) C++ project. Windows 10 SDK required.
+This is a Visual Studio 2026 (v145 toolset) C++ project. Windows 10 SDK required.
 
 ```
 # From Visual Studio
@@ -32,7 +32,7 @@ Output: `x64\Debug\AirPlayServer.exe`
 The following must be in the same directory as `AirPlayServer.exe` (copied by airplay2dll post-build step):
 - `airplay2dll.dll`, `dnssd.dll`
 - `SDL.dll` (SDL 1.2.15)
-- `avcodec-58.dll`, `avutil-56.dll`, `swscale-5.dll` (FFmpeg 4.x)
+- `avcodec-62.dll`, `avutil-60.dll`, `swscale-9.dll` (minimal LGPL FFmpeg 8.1.2)
 - `msys-2.0.dll` (MSYS2 runtime, required by libplist)
 
 ### Build Caveats
@@ -47,7 +47,7 @@ The following must be in the same directory as `AirPlayServer.exe` (copied by ai
 
 | Project | Type | Language | Purpose |
 |---------|------|----------|---------|
-| **AirPlayLib** | Static lib (.lib) | C | Core AirPlay 2 protocol: RAOP, pairing, crypto, FDK-AAC decoding |
+| **AirPlayLib** | Static lib (.lib) | C | Core AirPlay 2 protocol: RAOP, pairing, crypto, FFmpeg AAC-ELD decoding |
 | **airplay2dll** | DLL | C++ | Wraps AirPlayLib + FFmpeg H.264 decoding, exports `fgServerStart/Stop/Scale` |
 | **dnssd** | DLL | C | mDNS/Bonjour service discovery, exports 28 `DNSService*` functions via `dnssd.def` |
 | **AirPlayServer** | Console exe | C++ | Windows GUI app using SDL 1.2 + ImGui software renderer |
@@ -193,7 +193,7 @@ Defined in `CImGuiManager.h` (`EQualityPreset`):
 
 All pre-built in `external/`:
 - **SDL 1.2.15** — Window management, audio output (legacy, not SDL2)
-- **FFmpeg 4.x** — avcodec-58, avutil-56, swscale-5
+- **FFmpeg 8.1.2** — minimal LGPL build with only AAC and H.264 decoders enabled
 - **Dear ImGui** — UI overlay (software-rendered, no GPU backend)
-- **FDK-AAC** — AAC audio decoding (compiled into AirPlayLib as source)
+- **FFmpeg** — H.264 video and AAC-ELD audio decoding (dynamically linked)
 - **libplist** — Apple property list parsing (requires MSYS2 runtime)

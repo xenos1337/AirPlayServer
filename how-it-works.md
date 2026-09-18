@@ -147,7 +147,7 @@ Network → raop.c → AAC Decoding → outputAudio() callback
 ```
 
 **Audio specifics:**
-- Decodes AAC audio using FDK-AAC or FFmpeg
+- Decodes AirPlay AAC-ELD audio using the minimal LGPL FFmpeg build
 - Buffers in queue (m_queueAudio) to handle jitter
 - SDL pulls from queue at hardware sample rate
 - Syncs with video using PTS timestamps

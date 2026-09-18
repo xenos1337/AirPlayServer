@@ -16,6 +16,13 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AirPlayLib", "AirPlayServer
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dnssd", "dnssd\dnssd.vcxproj", "{4374AC88-57B1-4C61-BE60-8DCE36B8BC36}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MirrorSimAdapter", "MirrorSimAdapter\MirrorSimAdapter.vcxproj", "{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}"
+	ProjectSection(ProjectDependencies) = postProject
+		{05D43605-FEB8-4D46-8CA8-A43DFCB53EA3} = {05D43605-FEB8-4D46-8CA8-A43DFCB53EA3}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AirPlayLibSmokeTests", "tests\AirPlayLibSmokeTests\AirPlayLibSmokeTests.vcxproj", "{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -56,6 +63,22 @@ Global
 		{4374AC88-57B1-4C61-BE60-8DCE36B8BC36}.Release|x64.Build.0 = Release|x64
 		{4374AC88-57B1-4C61-BE60-8DCE36B8BC36}.Release|x86.ActiveCfg = Release|Win32
 		{4374AC88-57B1-4C61-BE60-8DCE36B8BC36}.Release|x86.Build.0 = Release|Win32
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Debug|x64.ActiveCfg = Debug|x64
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Debug|x64.Build.0 = Debug|x64
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Debug|x86.ActiveCfg = Debug|Win32
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Debug|x86.Build.0 = Debug|Win32
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Release|x64.ActiveCfg = Release|x64
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Release|x64.Build.0 = Release|x64
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Release|x86.ActiveCfg = Release|Win32
+		{8E7C8DB1-6548-4DBD-B402-E92C2B1625E9}.Release|x86.Build.0 = Release|Win32
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Debug|x64.ActiveCfg = Debug|x64
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Debug|x64.Build.0 = Debug|x64
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Debug|x86.ActiveCfg = Debug|Win32
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Debug|x86.Build.0 = Debug|Win32
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Release|x64.ActiveCfg = Release|x64
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Release|x64.Build.0 = Release|x64
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Release|x86.ActiveCfg = Release|Win32
+		{C1EADB10-766A-42E0-BA83-A61AD7C1F2B5}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -35,10 +35,20 @@ int gettimeofday(struct timeval* tv/*in*/, struct timezone* tz/*in*/)
 }
 
 int pthread_cond_timedwait(cond_handle_t* __cond, mutex_handle_t* __mutex, const struct timespec* __timeout) {
+    (void)__mutex;
     if (__timeout != NULL) {
         struct timeval now;
+        LONGLONG timeout_ms;
         gettimeofday(&now, NULL);
-        WaitForSingleObject(*__cond, (__timeout->tv_sec - now.tv_sec) * 1000 + __timeout->tv_nsec / 1000000);
+        timeout_ms = ((__timeout->tv_sec - now.tv_sec) * 1000LL)
+            + (__timeout->tv_nsec / 1000000LL)
+            - (now.tv_usec / 1000LL);
+        if (timeout_ms < 0) {
+            timeout_ms = 0;
+        } else if (timeout_ms >= INFINITE) {
+            timeout_ms = INFINITE - 1;
+        }
+        WaitForSingleObject(*__cond, (DWORD)timeout_ms);
     }
     else {
         WaitForSingleObject(*__cond, INFINITE);

@@ -1,49 +1,215 @@
 name: Build & Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
   release:
     types: [created]
-  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: airplayserver-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   build:
     runs-on: windows-latest
-
+    env:
+      RUNTIME_DIR: AirPlayServer/bin/x64
+      RUNTIME_ZIP: airplay-runtime-win-x64.zip
+      RUNTIME_SHA256: airplay-runtime-win-x64.sha256
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
       - name: Create MSYS2 linker directory
-        run: mkdir -p "C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0"
-        shell: bash
+        run: New-Item -ItemType Directory -Force -Path "C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0" | Out-Null
+        shell: pwsh
 
       - name: Build solution (Release|x64)
-        run: msbuild AirPlay.sln /p:Configuration=Release /p:Platform=x64 /m
+        run: msbuild AirPlay.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m
 
-      - name: Create release zip
+      - name: Verify open-source codec boundary
+        shell: pwsh
         run: |
-          cd x64/Release
-          7z a -tzip ../../AirPlay2-Win-x64.zip *.exe *.dll
-        shell: bash
+          if (Test-Path -LiteralPath 'AirPlayServerLib/lib/fdk-aac') {
+            throw 'Fraunhofer FDK AAC must not be present in the release source tree.'
+          }
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AirPlay2-Win-x64
-          path: AirPlay2-Win-x64.zip
+          $buildInfo = Get-Content -Raw -LiteralPath 'external/ffmpeg/licenses/FFMPEG_BUILD_INFO-x64.txt'
+          foreach ($requiredSetting in @(
+            'FFmpeg 8.1.2',
+            '--disable-gpl',
+            '--disable-nonfree',
+            '--disable-version3',
+            '--enable-decoder=aac',
+            '--enable-decoder=h264'
+          )) {
+            if (-not $buildInfo.Contains($requiredSetting)) {
+              throw "FFmpeg build provenance is missing required setting: $requiredSetting"
+            }
+          }
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+          $decoderSmokeTest = 'x64/Release/AirPlayLibSmokeTests.exe'
+          if (-not (Test-Path -LiteralPath $decoderSmokeTest -PathType Leaf)) {
+            throw "AAC-ELD smoke test was not produced: $decoderSmokeTest"
+          }
+          & $decoderSmokeTest
+          if ($LASTEXITCODE -ne 0) {
+            throw "AAC-ELD smoke test exited with code $LASTEXITCODE."
+          }
+
+      - name: Verify adapter protocol and AirPlay listeners
+        shell: pwsh
+        run: |
+          $featureHeader = Get-Content -Raw -LiteralPath 'AirPlayServerLib/lib/global.h'
+          if ($featureHeader -notmatch '#define\s+GLOBAL_FEATURES_1\s+0x5A7FFEE6') {
+            throw 'AirPlay capability advertisement must remain mirroring/audio-only.'
+          }
+
+          $mirrorTransport = Get-Content -Raw -LiteralPath 'AirPlayServerLib/lib/raop_rtp_mirror.c'
+          if ($mirrorTransport -notmatch '#define\s+MIRROR_TIMING_RESPONSE_TIMEOUT_MS\s+300' -or
+              $mirrorTransport -notmatch '#define\s+MIRROR_TIMING_PROBE_INTERVAL_SECONDS\s+3' -or
+              $mirrorTransport -match 'sleepms\(10\)') {
+            throw 'Mirror timing probes must keep their bounded 300 ms response window and three-second cadence.'
+          }
+
+          .\.github\scripts\Test-MirrorSimAdapter.ps1 -RuntimeDir $env:RUNTIME_DIR
+
+      - name: Create runtime archive and checksum
+        shell: pwsh
+        run: |
+          $runtimeFileNames = @(
+            'airplay2dll.dll',
+            'avcodec-62.dll',
+            'avutil-60.dll',
+            'MirrorSimAdapter.exe',
+            'swscale-9.dll'
+          )
+          foreach ($runtimeFileName in $runtimeFileNames) {
+            $runtimeFile = Join-Path $env:RUNTIME_DIR $runtimeFileName
+            if (-not (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
+              throw "Required runtime file was not produced: $runtimeFile"
+            }
+          }
+
+          $stagingDir = Join-Path $env:RUNNER_TEMP 'airplay-runtime-win-x64'
+          New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
+          foreach ($runtimeFileName in $runtimeFileNames) {
+            Copy-Item -LiteralPath (Join-Path $env:RUNTIME_DIR $runtimeFileName) -Destination $stagingDir
+          }
+
+          Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $stagingDir 'LICENSE')
+          Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination $stagingDir
+
+          $ffmpegLicenseDir = Join-Path $stagingDir 'licenses/ffmpeg'
+          $libplistLicenseDir = Join-Path $stagingDir 'licenses/libplist'
+          $playFairLicenseDir = Join-Path $stagingDir 'licenses/playfair'
+          New-Item -ItemType Directory -Force -Path $ffmpegLicenseDir, $libplistLicenseDir, $playFairLicenseDir | Out-Null
+          Copy-Item -LiteralPath 'external/ffmpeg/licenses/COPYING.LGPLv2.1' -Destination $ffmpegLicenseDir
+          Copy-Item -LiteralPath 'external/ffmpeg/licenses/LICENSE.md' -Destination $ffmpegLicenseDir
+          Copy-Item -LiteralPath 'external/ffmpeg/licenses/FFMPEG_BUILD_INFO-x64.txt' -Destination $ffmpegLicenseDir
+          Copy-Item -LiteralPath 'external/ffmpeg/licenses/COPYING.LGPLv2.1' -Destination $libplistLicenseDir
+          Copy-Item -LiteralPath 'AirPlayServerLib/lib/playfair/LICENSE.md' -Destination (Join-Path $playFairLicenseDir 'COPYING.GPLv3.md')
+
+          $archivePath = Join-Path $env:GITHUB_WORKSPACE $env:RUNTIME_ZIP
+          Push-Location $stagingDir
+          try {
+            & 7z a -tzip $archivePath '*'
+            if ($LASTEXITCODE -ne 0) {
+              throw "7z exited with code $LASTEXITCODE."
+            }
+          }
+          finally {
+            Pop-Location
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant()
+          Set-Content -Path $env:RUNTIME_SHA256 -Value "$hash  $env:RUNTIME_ZIP" -NoNewline
+
+      - name: Create desktop archive and checksum
+        shell: pwsh
+        run: |
+          $desktopDir = Join-Path $env:RUNNER_TEMP 'AirPlay2-Win-x64'
+          New-Item -ItemType Directory -Force -Path $desktopDir | Out-Null
+          foreach ($fileName in @('AirPlayServer.exe', 'airplay2dll.dll', 'dnssd.dll', 'SDL2.dll', 'avcodec-62.dll', 'avutil-60.dll', 'swscale-9.dll', 'msys-2.0.dll')) {
+            Copy-Item -LiteralPath (Join-Path 'x64/Release' $fileName) -Destination $desktopDir -ErrorAction Stop
+          }
+          Copy-Item -LiteralPath 'LICENSE', 'THIRD_PARTY_NOTICES.md' -Destination $desktopDir
+          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'airplay-runtime-win-x64/licenses') -Destination $desktopDir -Recurse
+          Copy-Item -LiteralPath 'external/SDL2/LICENSE.txt' -Destination (Join-Path $desktopDir 'licenses/SDL2.txt')
+          Compress-Archive -Path "$desktopDir/*" -DestinationPath 'AirPlay2-Win-x64.zip'
+          $hash = (Get-FileHash -Algorithm SHA256 'AirPlay2-Win-x64.zip').Hash.ToLowerInvariant()
+          Set-Content -Path 'AirPlay2-Win-x64.sha256' -Value "$hash  AirPlay2-Win-x64.zip" -NoNewline
+
+      - name: Stage exact FFmpeg source for tagged releases
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $sourceName = 'ffmpeg-8.1.2.tar.xz'
+          $sourceUrl = "https://ffmpeg.org/releases/$sourceName"
+          $expectedHash = '464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c'
+          Invoke-WebRequest -Uri $sourceUrl -OutFile $sourceName
+          $actualHash = (Get-FileHash -Algorithm SHA256 $sourceName).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "FFmpeg source checksum mismatch. Expected $expectedHash, received $actualHash."
+          }
+          Set-Content -Path "$sourceName.sha256" -Value "$actualHash  $sourceName" -NoNewline
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          files: AirPlay2-Win-x64.zip
+          name: airplay-runtime-win-x64
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            AirPlay2-Win-x64.zip
+            AirPlay2-Win-x64.sha256
+            airplay-runtime-win-x64.zip
+            airplay-runtime-win-x64.sha256
+            ffmpeg-8.1.2.tar.xz
+            ffmpeg-8.1.2.tar.xz.sha256
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download runtime artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: airplay-runtime-win-x64
+          path: release-assets
+
+      - name: Attest runtime provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/*
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/AirPlay2-Win-x64.zip
+            release-assets/AirPlay2-Win-x64.sha256
+            release-assets/airplay-runtime-win-x64.zip
+            release-assets/airplay-runtime-win-x64.sha256
+            release-assets/ffmpeg-8.1.2.tar.xz
+            release-assets/ffmpeg-8.1.2.tar.xz.sha256

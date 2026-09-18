@@ -40,6 +40,11 @@ struct raop_callbacks_s {
 	void (*disconnected)(void* cls, const char* remoteName, const char* remoteDeviceId);
 	void  (*audio_process)(void *cls, pcm_data_struct *data, const char* remoteName, const char* remoteDeviceId);
     void  (*video_process)(void *cls, h264_decode_struct *data, const char* remoteName, const char* remoteDeviceId);
+	void  (*video_report_geometry)(void *cls, float sourceWidth, float sourceHeight,
+		float outputWidth, float outputHeight,
+		const char* remoteName, const char* remoteDeviceId);
+	void  (*video_set_sender_paused)(void *cls, int paused,
+		const char* remoteName, const char* remoteDeviceId);
 
 	/* Optional but recommended callback functions */
 	void  (*audio_flush)(void *cls, void *session, const char* remoteName, const char* remoteDeviceId);
@@ -50,9 +55,20 @@ struct raop_callbacks_s {
 	void  (*audio_set_progress)(void *cls, void *session, unsigned int start, unsigned int curr, unsigned int end, const char* remoteName, const char* remoteDeviceId);
 	/* Optional in-app approval before a protected connection receives its PIN. */
 	int (*pin_request)(void *cls, const char *remoteAddress, const char *pin);
+	int   (*pairing_request)(
+		void *cls,
+		const char* remoteName,
+		const char* remoteDeviceId,
+		const char* remoteModel,
+		const char* remoteOsName,
+		const char* remoteOsVersion,
+		const char* remoteOsBuildVersion,
+		const char* remoteSourceVersion,
+		const char* pairingFingerprint);
 };
 typedef struct raop_callbacks_s raop_callbacks_t;
 
+RAOP_API raop_t *raop_init_with_seed(int max_clients, raop_callbacks_t *callbacks, const unsigned char pairing_seed[32]);
 RAOP_API raop_t *raop_init(int max_clients, raop_callbacks_t *callbacks);
 
 RAOP_API void raop_set_log_level(raop_t *raop, int level);

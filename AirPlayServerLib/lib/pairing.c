@@ -184,6 +184,19 @@ pairing_session_get_public_key(pairing_session_t *session, unsigned char ecdh_ke
 }
 
 int
+pairing_session_get_peer_public_key(pairing_session_t *session, unsigned char ed_key[32])
+{
+	assert(session);
+
+	if (session->status != STATUS_HANDSHAKE && session->status != STATUS_FINISHED) {
+		return -1;
+	}
+
+	memcpy(ed_key, session->ed_theirs, 32);
+	return 0;
+}
+
+int
 pairing_session_get_signature(pairing_session_t *session, unsigned char signature[64])
 {
 	unsigned char sig_msg[64];

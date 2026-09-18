@@ -14,13 +14,28 @@ public:
 	virtual void connected(const char* remoteName, const char* remoteDeviceId) = 0;
 	virtual void disconnected(const char* remoteName, const char* remoteDeviceId) = 0;
 	virtual void outputAudio(SFgAudioFrame* data, const char* remoteName, const char* remoteDeviceId) = 0;
+	virtual void outputH264AccessUnit(SFgH264AccessUnit* data, const char* remoteName, const char* remoteDeviceId) = 0;
 	virtual void outputVideo(SFgVideoFrame* data, const char* remoteName, const char* remoteDeviceId) = 0;
+	virtual void videoGeometryChanged(float sourceWidth, float sourceHeight,
+		float outputWidth, float outputHeight,
+		const char* remoteName, const char* remoteDeviceId) = 0;
+	virtual void videoSenderPausedChanged(bool paused,
+		const char* remoteName, const char* remoteDeviceId) = 0;
 
 	virtual void videoPlay(char* url, double volume, double startPos) = 0;
 	virtual void videoGetPlayInfo(double* duration, double* position, double* rate) = 0;
 
 	// Audio volume control (volume in dB: 0.0 = max, -144.0 = mute)
 	virtual void setVolume(float volume, const char* remoteName, const char* remoteDeviceId) = 0;
+	virtual bool approvePairingRequest(
+		const char* remoteName,
+		const char* remoteDeviceId,
+		const char* remoteModel,
+		const char* remoteOsName,
+		const char* remoteOsVersion,
+		const char* remoteOsBuildVersion,
+		const char* remoteSourceVersion,
+		const char* pairingFingerprint) = 0;
 
 	// Runs on the receiver network thread and waits for the app's allow/deny UI.
 	virtual bool requestPinApproval(const char* remoteAddress, const char* pin) = 0;
@@ -35,6 +50,9 @@ AIRPLAYSERVER_API void* fgServerStartWithDisplay(const char serverName[AIRPLAY_N
 	unsigned int raopPort, unsigned int airplayPort,
 	IAirServerCallback* callback, const char* password,
 	unsigned int displayWidth, unsigned int displayHeight);
+AIRPLAYSERVER_API void* fgServerStartHeadless(const char serverName[AIRPLAY_NAME_LEN],
+	unsigned int raopPort, unsigned int airplayPort,
+	IAirServerCallback* callback);
 AIRPLAYSERVER_API void fgServerStop(void* handle);
 
 AIRPLAYSERVER_API float fgServerScale(void* handle, float fRatio);

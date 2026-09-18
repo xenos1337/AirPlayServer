@@ -278,6 +278,7 @@ conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remot
 	conn->remotelen = remotelen;
 
 	digest_generate_nonce(conn->nonce, sizeof(conn->nonce));
+	logger_log(conn->airplay->logger, LOGGER_INFO, "AirPlay control connection opened");
 	return conn;
 
 }
@@ -373,7 +374,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	{
 		int len = 0;
 		http_request_get_data(request, &len);
-		logger_log(conn->airplay->logger, LOGGER_DEBUG, "data len %d", len);
+		logger_log(conn->airplay->logger, LOGGER_DEBUG, "AirPlay control request body length=%d", len);
 	}
 
 	airplay_handler_t handler = NULL;
@@ -422,6 +423,7 @@ static void
 conn_destroy(void *ptr)
 {
 	airplay_conn_t *conn = ptr;
+	logger_log(conn->airplay->logger, LOGGER_INFO, "AirPlay control connection closed");
 	if (conn->airplay_rtp)
 	{
 		raop_rtp_destroy(conn->airplay_rtp);
@@ -450,6 +452,12 @@ conn_datafeed(void *ptr, unsigned char *data, int len)
  
 airplay_t *
 airplay_init(int max_clients, airplay_callbacks_t *callbacks, const char *pemkey, int *error)
+{
+	return airplay_init_with_seed(max_clients, callbacks, pemkey, NULL, error);
+}
+
+airplay_t *
+airplay_init_with_seed(int max_clients, airplay_callbacks_t *callbacks, const char *pemkey, const unsigned char pairing_seed[32], int *error)
 {
 	airplay_t *airplay;
 	pairing_t* pairing;
@@ -482,7 +490,7 @@ airplay_init(int max_clients, airplay_callbacks_t *callbacks, const char *pemkey
 	}
 
 	airplay->logger = logger_init();
-	pairing = pairing_init_generate();
+	pairing = pairing_seed ? pairing_init_seed(pairing_seed) : pairing_init_generate();
 	if (!pairing) {
 		free(airplay);
 		return NULL;

@@ -11,6 +11,15 @@ typedef struct SFgAudioFrame {
 	unsigned char* data;
 } SFgAudioFrame;
 
+typedef struct SFgH264AccessUnit {
+	unsigned long long pts;
+	unsigned long long dts;
+	unsigned int duration;
+	int isKey;
+	unsigned int dataLen;
+	unsigned char* data;
+} SFgH264AccessUnit;
+
 // Decoded video frame
 typedef struct SFgVideoFrame {
 	unsigned long long pts;

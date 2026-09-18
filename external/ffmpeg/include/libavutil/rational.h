@@ -22,7 +22,7 @@
 /**
  * @file
  * @ingroup lavu_math_rational
- * Utilties for rational number calculation.
+ * Utilities for rational number calculation.
  * @author Michael Niedermayer <michaelni@gmx.at>
  */
 
@@ -168,6 +168,10 @@ static av_always_inline AVRational av_inv_q(AVRational q)
  * In case of infinity, the returned value is expressed as `{1, 0}` or
  * `{-1, 0}` depending on the sign.
  *
+ * In general rational numbers with |num| <= 1<<26 && |den| <= 1<<26
+ * can be recovered exactly from their double representation.
+ * (no exceptions were found within 1B random ones)
+ *
  * @param d   `double` to convert
  * @param max Maximum allowed numerator and denominator
  * @return `d` in AVRational form
@@ -179,7 +183,8 @@ AVRational av_d2q(double d, int max) av_const;
  * Find which of the two rationals is closer to another rational.
  *
  * @param q     Rational to be compared against
- * @param q1,q2 Rationals to be tested
+ * @param q1    Rational to be tested
+ * @param q2    Rational to be tested
  * @return One of the following values:
  *         - 1 if `q1` is nearer to `q` than `q2`
  *         - -1 if `q2` is nearer to `q` than `q1`
@@ -206,6 +211,12 @@ int av_find_nearest_q_idx(AVRational q, const AVRational* q_list);
  * @note The returned value is platform-indepedant.
  */
 uint32_t av_q2intfloat(AVRational q);
+
+/**
+ * Return the best rational so that a and b are multiple of it.
+ * If the resulting denominator is larger than max_den, return def.
+ */
+AVRational av_gcd_q(AVRational a, AVRational b, int max_den, AVRational def);
 
 /**
  * @}

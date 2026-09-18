@@ -40,20 +40,22 @@
 #include <string.h>
 
 #include "attributes.h"
+#include "error.h"
 #include "macros.h"
 #include "version.h"
-#include "libavutil/avconfig.h"
 
-#if AV_HAVE_BIGENDIAN
-#   define AV_NE(be, le) (be)
+#ifdef HAVE_AV_CONFIG_H
+#   include "config.h"
+#   include "intmath.h"
+#   include "internal.h"
 #else
-#   define AV_NE(be, le) (le)
-#endif
+#   include "mem.h"
+#endif /* HAVE_AV_CONFIG_H */
 
 //rounded division & shift
 #define RSHIFT(a,b) ((a) > 0 ? ((a) + ((1<<(b))>>1))>>(b) : ((a) + ((1<<(b))>>1)-1)>>(b))
 /* assume b>0 */
-#define ROUNDED_DIV(a,b) (((a)>0 ? (a) + ((b)>>1) : (a) - ((b)>>1))/(b))
+#define ROUNDED_DIV(a,b) (((a)>=0 ? (a) + ((b)>>1) : (a) - ((b)>>1))/(b))
 /* Fast a/(1<<b) rounded toward +inf. Assume a>=0 and b>=0 */
 #define AV_CEIL_RSHIFT(a,b) (!av_builtin_constant_p(b) ? -((-(a)) >> (b)) \
                                                        : ((a) + (1<<(b)) - 1) >> (b))
@@ -81,33 +83,82 @@
 #define FFNABS(a) ((a) <= 0 ? (a) : (-(a)))
 
 /**
- * Comparator.
- * For two numerical expressions x and y, gives 1 if x > y, -1 if x < y, and 0
- * if x == y. This is useful for instance in a qsort comparator callback.
- * Furthermore, compilers are able to optimize this to branchless code, and
- * there is no risk of overflow with signed types.
- * As with many macros, this evaluates its argument multiple times, it thus
- * must not have a side-effect.
+ * Unsigned Absolute value.
+ * This takes the absolute value of a signed int and returns it as a unsigned.
+ * This also works with INT_MIN which would otherwise not be representable
+ * As with many macros, this evaluates its argument twice.
  */
-#define FFDIFFSIGN(x,y) (((x)>(y)) - ((x)<(y)))
-
-#define FFMAX(a,b) ((a) > (b) ? (a) : (b))
-#define FFMAX3(a,b,c) FFMAX(FFMAX(a,b),c)
-#define FFMIN(a,b) ((a) > (b) ? (b) : (a))
-#define FFMIN3(a,b,c) FFMIN(FFMIN(a,b),c)
-
-#define FFSWAP(type,a,b) do{type SWAP_tmp= b; b= a; a= SWAP_tmp;}while(0)
-#define FF_ARRAY_ELEMS(a) (sizeof(a) / sizeof((a)[0]))
+#define FFABSU(a) ((a) <= 0 ? -(unsigned)(a) : (unsigned)(a))
+#define FFABS64U(a) ((a) <= 0 ? -(uint64_t)(a) : (uint64_t)(a))
 
 /* misc math functions */
 
-#ifdef HAVE_AV_CONFIG_H
-#   include "config.h"
-#   include "intmath.h"
+#ifndef av_ceil_log2
+#   define av_ceil_log2     av_ceil_log2_c
 #endif
-
-/* Pull in unguarded fallback defines at the end of this file. */
-#include "common.h"
+#ifndef av_clip
+#   define av_clip          av_clip_c
+#endif
+#ifndef av_clip64
+#   define av_clip64        av_clip64_c
+#endif
+#ifndef av_clip_uint8
+#   define av_clip_uint8    av_clip_uint8_c
+#endif
+#ifndef av_clip_int8
+#   define av_clip_int8     av_clip_int8_c
+#endif
+#ifndef av_clip_uint16
+#   define av_clip_uint16   av_clip_uint16_c
+#endif
+#ifndef av_clip_int16
+#   define av_clip_int16    av_clip_int16_c
+#endif
+#ifndef av_clipl_int32
+#   define av_clipl_int32   av_clipl_int32_c
+#endif
+#ifndef av_clip_intp2
+#   define av_clip_intp2    av_clip_intp2_c
+#endif
+#ifndef av_clip_uintp2
+#   define av_clip_uintp2   av_clip_uintp2_c
+#endif
+#ifndef av_sat_add32
+#   define av_sat_add32     av_sat_add32_c
+#endif
+#ifndef av_sat_dadd32
+#   define av_sat_dadd32    av_sat_dadd32_c
+#endif
+#ifndef av_sat_sub32
+#   define av_sat_sub32     av_sat_sub32_c
+#endif
+#ifndef av_sat_dsub32
+#   define av_sat_dsub32    av_sat_dsub32_c
+#endif
+#ifndef av_sat_add64
+#   define av_sat_add64     av_sat_add64_c
+#endif
+#ifndef av_sat_sub64
+#   define av_sat_sub64     av_sat_sub64_c
+#endif
+#ifndef av_clipf
+#   define av_clipf         av_clipf_c
+#endif
+#ifndef av_clipd
+#   define av_clipd         av_clipd_c
+#endif
+#ifndef av_zero_extend
+#   define av_zero_extend   av_zero_extend_c
+#endif
+#ifndef av_popcount
+#   define av_popcount      av_popcount_c
+#endif
+#ifndef av_popcount64
+#   define av_popcount64    av_popcount64_c
+#endif
+#ifndef av_parity
+#   define av_parity        av_parity_c
+#endif
 
 #ifndef av_log2
 av_const int av_log2(unsigned v);
@@ -202,8 +253,8 @@ static av_always_inline av_const int16_t av_clip_int16_c(int a)
  */
 static av_always_inline av_const int32_t av_clipl_int32_c(int64_t a)
 {
-    if ((a+0x80000000u) & ~UINT64_C(0xFFFFFFFF)) return (int32_t)((a>>63) ^ 0x7FFFFFFF);
-    else                                         return (int32_t)a;
+    if ((a+UINT64_C(0x80000000)) & ~UINT64_C(0xFFFFFFFF)) return (int32_t)((a>>63) ^ 0x7FFFFFFF);
+    else                                                  return (int32_t)a;
 }
 
 /**
@@ -214,7 +265,7 @@ static av_always_inline av_const int32_t av_clipl_int32_c(int64_t a)
  */
 static av_always_inline av_const int av_clip_intp2_c(int a, int p)
 {
-    if (((unsigned)a + (1 << p)) & ~((2 << p) - 1))
+    if (((unsigned)a + (1U << p)) & ~((2U << p) - 1))
         return (a >> 31) ^ ((1 << p) - 1);
     else
         return a;
@@ -228,20 +279,34 @@ static av_always_inline av_const int av_clip_intp2_c(int a, int p)
  */
 static av_always_inline av_const unsigned av_clip_uintp2_c(int a, int p)
 {
-    if (a & ~((1<<p) - 1)) return (~a) >> 31 & ((1<<p) - 1);
-    else                   return  a;
+    if (a & ~((1U<<p) - 1)) return (~a) >> 31 & ((1U<<p) - 1);
+    else                    return  a;
 }
 
 /**
  * Clear high bits from an unsigned integer starting with specific bit position
  * @param  a value to clip
- * @param  p bit position to clip at
+ * @param  p bit position to clip at. Must be between 0 and 31.
  * @return clipped value
  */
+static av_always_inline av_const unsigned av_zero_extend_c(unsigned a, unsigned p)
+{
+#if defined(HAVE_AV_CONFIG_H) && defined(ASSERT_LEVEL) && ASSERT_LEVEL >= 2
+    if (p > 31) abort();
+#endif
+    return a & ((1U << p) - 1);
+}
+
+#if FF_API_MOD_UINTP2
+#ifndef av_mod_uintp2
+#   define av_mod_uintp2 av_mod_uintp2_c
+#endif
+attribute_deprecated
 static av_always_inline av_const unsigned av_mod_uintp2_c(unsigned a, unsigned p)
 {
-    return a & ((1 << p) - 1);
+    return av_zero_extend_c(a, p);
 }
+#endif
 
 /**
  * Add two signed 32-bit values with saturation.
@@ -292,7 +357,48 @@ static av_always_inline int av_sat_dsub32_c(int a, int b)
 }
 
 /**
+ * Add two signed 64-bit values with saturation.
+ *
+ * @param  a one value
+ * @param  b another value
+ * @return sum with signed saturation
+ */
+static av_always_inline int64_t av_sat_add64_c(int64_t a, int64_t b) {
+#if (!defined(__INTEL_COMPILER) && AV_GCC_VERSION_AT_LEAST(5,1)) || AV_HAS_BUILTIN(__builtin_add_overflow)
+    int64_t tmp;
+    return !__builtin_add_overflow(a, b, &tmp) ? tmp : (tmp < 0 ? INT64_MAX : INT64_MIN);
+#else
+    int64_t s = a+(uint64_t)b;
+    if ((int64_t)(a^b | ~s^b) >= 0)
+        return INT64_MAX ^ (b >> 63);
+    return s;
+#endif
+}
+
+/**
+ * Subtract two signed 64-bit values with saturation.
+ *
+ * @param  a one value
+ * @param  b another value
+ * @return difference with signed saturation
+ */
+static av_always_inline int64_t av_sat_sub64_c(int64_t a, int64_t b) {
+#if (!defined(__INTEL_COMPILER) && AV_GCC_VERSION_AT_LEAST(5,1)) || AV_HAS_BUILTIN(__builtin_sub_overflow)
+    int64_t tmp;
+    return !__builtin_sub_overflow(a, b, &tmp) ? tmp : (tmp < 0 ? INT64_MAX : INT64_MIN);
+#else
+    if (b <= 0 && a >= INT64_MAX + b)
+        return INT64_MAX;
+    if (b >= 0 && a <= INT64_MIN + b)
+        return INT64_MIN;
+    return a - b;
+#endif
+}
+
+/**
  * Clip a float value into the amin-amax range.
+ * If a is nan or -inf amin will be returned.
+ * If a is +inf amax will be returned.
  * @param a value to clip
  * @param amin minimum value of the clip range
  * @param amax maximum value of the clip range
@@ -303,13 +409,13 @@ static av_always_inline av_const float av_clipf_c(float a, float amin, float ama
 #if defined(HAVE_AV_CONFIG_H) && defined(ASSERT_LEVEL) && ASSERT_LEVEL >= 2
     if (amin > amax) abort();
 #endif
-    if      (a < amin) return amin;
-    else if (a > amax) return amax;
-    else               return a;
+    return FFMIN(FFMAX(a, amin), amax);
 }
 
 /**
  * Clip a double value into the amin-amax range.
+ * If a is nan or -inf amin will be returned.
+ * If a is +inf amax will be returned.
  * @param a value to clip
  * @param amin minimum value of the clip range
  * @param amax maximum value of the clip range
@@ -320,9 +426,7 @@ static av_always_inline av_const double av_clipd_c(double a, double amin, double
 #if defined(HAVE_AV_CONFIG_H) && defined(ASSERT_LEVEL) && ASSERT_LEVEL >= 2
     if (amin > amax) abort();
 #endif
-    if      (a < amin) return amin;
-    else if (a > amax) return amax;
-    else               return a;
+    return FFMIN(FFMAX(a, amin), amax);
 }
 
 /** Compute ceil(log2(x)).
@@ -331,7 +435,7 @@ static av_always_inline av_const double av_clipd_c(double a, double amin, double
  */
 static av_always_inline av_const int av_ceil_log2_c(int x)
 {
-    return av_log2((x - 1) << 1);
+    return av_log2((x - 1U) << 1);
 }
 
 /**
@@ -363,9 +467,6 @@ static av_always_inline av_const int av_parity_c(uint32_t v)
     return av_popcount(v) & 1;
 }
 
-#define MKTAG(a,b,c,d) ((a) | ((b) << 8) | ((c) << 16) | ((unsigned)(d) << 24))
-#define MKBETAG(a,b,c,d) ((d) | ((c) << 8) | ((b) << 16) | ((unsigned)(a) << 24))
-
 /**
  * Convert a UTF-8 character (up to 4 bytes) to its 32-bit UCS-4 encoded form.
  *
@@ -373,7 +474,9 @@ static av_always_inline av_const int av_parity_c(uint32_t v)
  * @param GET_BYTE Expression reading one byte from the input.
  *                 Evaluated up to 7 times (4 for the currently
  *                 assigned Unicode range).  With a memory buffer
- *                 input, this could be *ptr++.
+ *                 input, this could be *ptr++, or if you want to make sure
+ *                 that *ptr stops at the end of a NULL terminated string then
+ *                 *ptr ? *ptr++ : 0
  * @param ERROR    Expression to be evaluated on invalid input,
  *                 typically a goto statement.
  *
@@ -383,15 +486,15 @@ static av_always_inline av_const int av_parity_c(uint32_t v)
  * to prevent undefined results.
  */
 #define GET_UTF8(val, GET_BYTE, ERROR)\
-    val= (GET_BYTE);\
+    val= (uint8_t)(GET_BYTE);\
     {\
         uint32_t top = (val & 128) >> 1;\
         if ((val & 0xc0) == 0x80 || val >= 0xFE)\
-            ERROR\
+            {ERROR}\
         while (val & top) {\
-            int tmp= (GET_BYTE) - 128;\
+            unsigned int tmp = (uint8_t)(GET_BYTE) - 128;\
             if(tmp>>6)\
-                ERROR\
+                {ERROR}\
             val= (val<<6) + tmp;\
             top <<= 5;\
         }\
@@ -408,13 +511,13 @@ static av_always_inline av_const int av_parity_c(uint32_t v)
  *                  typically a goto statement.
  */
 #define GET_UTF16(val, GET_16BIT, ERROR)\
-    val = GET_16BIT;\
+    val = (uint16_t)(GET_16BIT);\
     {\
         unsigned int hi = val - 0xD800;\
         if (hi < 0x800) {\
-            val = GET_16BIT - 0xDC00;\
+            val = (uint16_t)(GET_16BIT) - 0xDC00;\
             if (val > 0x3FFU || hi > 0x3FFU)\
-                ERROR\
+                {ERROR}\
             val += (hi<<10) + 0x10000;\
         }\
     }\
@@ -483,78 +586,4 @@ static av_always_inline av_const int av_parity_c(uint32_t v)
         }\
     }\
 
-
-
-#include "mem.h"
-
-#ifdef HAVE_AV_CONFIG_H
-#    include "internal.h"
-#endif /* HAVE_AV_CONFIG_H */
-
 #endif /* AVUTIL_COMMON_H */
-
-/*
- * The following definitions are outside the multiple inclusion guard
- * to ensure they are immediately available in intmath.h.
- */
-
-#ifndef av_ceil_log2
-#   define av_ceil_log2     av_ceil_log2_c
-#endif
-#ifndef av_clip
-#   define av_clip          av_clip_c
-#endif
-#ifndef av_clip64
-#   define av_clip64        av_clip64_c
-#endif
-#ifndef av_clip_uint8
-#   define av_clip_uint8    av_clip_uint8_c
-#endif
-#ifndef av_clip_int8
-#   define av_clip_int8     av_clip_int8_c
-#endif
-#ifndef av_clip_uint16
-#   define av_clip_uint16   av_clip_uint16_c
-#endif
-#ifndef av_clip_int16
-#   define av_clip_int16    av_clip_int16_c
-#endif
-#ifndef av_clipl_int32
-#   define av_clipl_int32   av_clipl_int32_c
-#endif
-#ifndef av_clip_intp2
-#   define av_clip_intp2    av_clip_intp2_c
-#endif
-#ifndef av_clip_uintp2
-#   define av_clip_uintp2   av_clip_uintp2_c
-#endif
-#ifndef av_mod_uintp2
-#   define av_mod_uintp2    av_mod_uintp2_c
-#endif
-#ifndef av_sat_add32
-#   define av_sat_add32     av_sat_add32_c
-#endif
-#ifndef av_sat_dadd32
-#   define av_sat_dadd32    av_sat_dadd32_c
-#endif
-#ifndef av_sat_sub32
-#   define av_sat_sub32     av_sat_sub32_c
-#endif
-#ifndef av_sat_dsub32
-#   define av_sat_dsub32    av_sat_dsub32_c
-#endif
-#ifndef av_clipf
-#   define av_clipf         av_clipf_c
-#endif
-#ifndef av_clipd
-#   define av_clipd         av_clipd_c
-#endif
-#ifndef av_popcount
-#   define av_popcount      av_popcount_c
-#endif
-#ifndef av_popcount64
-#   define av_popcount64    av_popcount64_c
-#endif
-#ifndef av_parity
-#   define av_parity        av_parity_c
-#endif

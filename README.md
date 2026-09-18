@@ -65,7 +65,7 @@ The app warns you at startup if Bonjour is missing or its service is not running
 
 ## Features
 
-- AirPlay video, audio, and screen mirroring from iOS and macOS
+- Screen mirroring and audio from iOS and macOS; unsupported standalone URL/HLS playback is not advertised
 - 30 and 60 FPS quality presets
 - GPU texture upload and YUV to RGB conversion
 - Frame pacing for smoother playback
@@ -159,12 +159,23 @@ You can change the preset from the session controls while video is playing.
 - If Windows is running in a virtual machine, use bridged networking instead of NAT.
 - Disconnect any VPN or proxy that may be intercepting the local connection.
 
+## Headless adapter
+
+The `MirrorSimAdapter` sidecar exposes protocol `0.8.0`, including bounded H.264 access-unit and interleaved signed 16-bit PCM audio events, sender-volume changes, receiver-reported source/video geometry, and explicit mirror sender pause/resume events over JSONL. The source-screen shape provides orientation without mistaking a separate landscape media surface for a rotated phone. Video and audio serialization run on bounded worker queues so a busy desktop client cannot block the AirPlay network callback; overloaded video output drops forward to the next decoder keyframe instead of building an unbounded backlog, and repeated codec-only packets are deduplicated.
+
+When a host sets `MIRRORSIM_EXTERNAL_DNSSD=1`, the headless adapter skips its Bonjour client registration and lets the host advertise `_airplay._tcp` and `_raop._tcp` itself. `MIRRORSIM_HARDWARE_ADDRESS` accepts the shared 12-digit hexadecimal discovery identity, keeping AirPlay identity stable between the native protocol server and the external advertiser.
+
+The headless adapter advertises mirroring and audio capabilities only. Media apps therefore remain inside the mirrored screen instead of handing standalone playback to the receiver's intentionally unsupported URL/HLS path.
+
+Mirror timing requests use a 300 ms response window and a three-second cadence. Timing failures and AirPlay control lifecycle transitions are summarized on stderr for MirrorSim diagnostics without flooding the sender or the support log.
+
 ## Build from source
 
-You need Visual Studio 2022 with the v143 toolset and a Windows 10 SDK.
+The projects target Visual Studio 2026 with the v145 toolset and a Windows 10 SDK.
+With Visual Studio 2022, build from a Developer Command Prompt using
+`msbuild AirPlay.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m`.
 
-1. Clone the repository:
-
+1. Clone the repository
    ```bash
    git clone https://github.com/xenos1337/AirPlayServer.git
    ```
@@ -187,6 +198,8 @@ AirPlayServer/
 |-- AirPlayServerLib/        # AirPlay 2 protocol library
 |   `-- lib/                 # RAOP, pairing, crypto, and codecs
 |-- airplay2dll/             # DLL wrapper and FFmpeg H.264 decoder
+|-- MirrorSimAdapter/        # Headless JSONL adapter
+|-- tests/                   # Codec and protocol smoke tests
 |-- dnssd/                   # Bonjour discovery DLL
 |-- external/                # SDL2, FFmpeg, ImGui, and other dependencies
 `-- AirPlay.sln
@@ -198,7 +211,12 @@ Bug reports, feature requests, and pull requests are welcome. Follow the existin
 
 ## License
 
-The repository contains code from several libraries. Check each library's license for its terms.
+Repository-authored code is provided under the MIT license. The receiver also
+uses OSI-approved third-party components, including dynamically linked FFmpeg
+under LGPL-2.1-or-later, libplist under LGPL-2.1-or-later, and PlayFair
+interoperability code under GPL-3.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for component scope, exact FFmpeg build provenance, source availability, and
+license locations.
 
 ## Credits
 

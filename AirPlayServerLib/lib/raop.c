@@ -195,6 +195,7 @@ conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remot
 	conn->locallen = locallen;
 	conn->remotelen = remotelen;
 	digest_generate_nonce(conn->nonce, sizeof(conn->nonce));
+	logger_log(conn->raop->logger, LOGGER_INFO, "RAOP control connection opened");
 
 	return conn;
 }
@@ -682,6 +683,10 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
   //          conn->raop_rtp_mirror = NULL;
   //      }
 	}
+	if (handler == NULL && strcmp(method, "FLUSH")) {
+		logger_log(conn->raop->logger, LOGGER_WARNING,
+		           "Unhandled RAOP control request %s %s", method, url ? url : "");
+	}
 	if (handler != NULL) {
 		handler(conn, request, *response, &response_data, &response_datalen);
 		if (handler == &raop_handler_info) {
@@ -714,6 +719,8 @@ static void
 conn_destroy(void *ptr)
 {
 	raop_conn_t *conn = ptr;
+	logger_log(conn->raop->logger, LOGGER_INFO, "RAOP control connection closed");
+
 	if (conn->raop_rtp) {
 		/* This is done in case TEARDOWN was not called */
 		raop_rtp_destroy(conn->raop_rtp);
@@ -731,6 +738,12 @@ conn_destroy(void *ptr)
 
 raop_t *
 raop_init(int max_clients, raop_callbacks_t *callbacks)
+{
+	return raop_init_with_seed(max_clients, callbacks, NULL);
+}
+
+raop_t *
+raop_init_with_seed(int max_clients, raop_callbacks_t *callbacks, const unsigned char pairing_seed[32])
 {
 	raop_t *raop;
 	pairing_t *pairing;
@@ -759,7 +772,7 @@ raop_init(int max_clients, raop_callbacks_t *callbacks)
 
 	/* Initialize the logger */
 	raop->logger = logger_init();
-	pairing = pairing_init_generate();
+	pairing = pairing_seed ? pairing_init_seed(pairing_seed) : pairing_init_generate();
 	if (!pairing) {
 		free(raop);
 		return NULL;

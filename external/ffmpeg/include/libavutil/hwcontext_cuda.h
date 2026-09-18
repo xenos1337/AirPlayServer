@@ -49,4 +49,26 @@ typedef struct AVCUDADeviceContext {
  * AVHWFramesContext.hwctx is currently not used
  */
 
+/**
+ * @defgroup hwcontext_cuda Device context creation flags
+ *
+ * Flags for av_hwdevice_ctx_create.
+ *
+ * @{
+ */
+
+/**
+ * Use primary device context instead of creating a new one.
+ */
+#define AV_CUDA_USE_PRIMARY_CONTEXT (1 << 0)
+
+/**
+ * Use current device context instead of creating a new one.
+ */
+#define AV_CUDA_USE_CURRENT_CONTEXT (1 << 1)
+
+/**
+ * @}
+ */
+
 #endif /* AVUTIL_HWCONTEXT_CUDA_H */

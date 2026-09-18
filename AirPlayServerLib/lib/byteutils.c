@@ -126,7 +126,7 @@ clock_gettime(int X, struct timespec* tv)
     microseconds = (double)t.QuadPart / frequencyToMicroseconds;
     t.QuadPart = (LONGLONG)microseconds;
     tv->tv_sec = (long)(t.QuadPart / 1000000);
-    tv->tv_nsec = t.QuadPart % 1000000;
+    tv->tv_nsec = (long)((t.QuadPart % 1000000) * 1000);
     return (0);
 }
 #endif // WIN32
@@ -134,5 +134,5 @@ clock_gettime(int X, struct timespec* tv)
 uint64_t now_us() {
     struct timespec time;
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time);
-    return (uint64_t)time.tv_sec * 10000000L + (uint64_t)(time.tv_nsec / 1000);
+    return (uint64_t)time.tv_sec * 1000000L + (uint64_t)(time.tv_nsec / 1000);
 }

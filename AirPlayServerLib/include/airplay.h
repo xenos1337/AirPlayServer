@@ -48,6 +48,7 @@ extern "C" {
 	};
 	typedef struct airplay_callbacks_s airplay_callbacks_t;
 
+	AIRPLAY_API airplay_t *airplay_init_with_seed(int max_clients, airplay_callbacks_t *callbacks, const char *pemkey, const unsigned char pairing_seed[32], int *error);
 	AIRPLAY_API airplay_t *airplay_init(int max_clients, airplay_callbacks_t *callbacks, const char *pemkey, int *error);
 	AIRPLAY_API airplay_t *airplay_init_from_keyfile(int max_clients, airplay_callbacks_t *callbacks, const char *keyfile, int *error);
 

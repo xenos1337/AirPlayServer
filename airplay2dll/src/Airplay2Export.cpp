@@ -15,8 +15,23 @@ void* fgServerStartWithDisplay(const char serverName[AIRPLAY_NAME_LEN],
 	unsigned int displayWidth, unsigned int displayHeight)
 {
 	FgAirplayServer* pServer = new FgAirplayServer();
-	pServer->start(serverName, raopPort, airplayPort, callback, password,
-		displayWidth, displayHeight);
+	if (pServer->start(serverName, raopPort, airplayPort, callback, password,
+		displayWidth, displayHeight) != 0) {
+		delete pServer;
+		return NULL;
+	}
+	return pServer;
+}
+
+void* fgServerStartHeadless(const char serverName[AIRPLAY_NAME_LEN],
+	unsigned int raopPort, unsigned int airplayPort,
+	IAirServerCallback* callback)
+{
+	FgAirplayServer* pServer = new FgAirplayServer();
+	if (pServer->start(serverName, raopPort, airplayPort, callback, NULL, 1920, 1080, true) != 0) {
+		delete pServer;
+		return NULL;
+	}
 	return pServer;
 }
 

@@ -73,6 +73,13 @@ void CAirServerCallback::outputAudio(SFgAudioFrame* data, const char* remoteName
 	}
 }
 
+void CAirServerCallback::outputH264AccessUnit(SFgH264AccessUnit* data, const char* remoteName, const char* remoteDeviceId)
+{
+	(void)data;
+	(void)remoteName;
+	(void)remoteDeviceId;
+}
+
 void CAirServerCallback::outputVideo(SFgVideoFrame* data, const char* remoteName, const char* remoteDeviceId)
 {
 	if (m_pPlayer)
@@ -87,6 +94,26 @@ void CAirServerCallback::outputVideo(SFgVideoFrame* data, const char* remoteName
 		}
 		m_pPlayer->outputVideo(data);
 	}
+}
+
+void CAirServerCallback::videoGeometryChanged(float sourceWidth, float sourceHeight,
+	float outputWidth, float outputHeight,
+	const char* remoteName, const char* remoteDeviceId)
+{
+	UNREFERENCED_PARAMETER(sourceWidth);
+	UNREFERENCED_PARAMETER(sourceHeight);
+	UNREFERENCED_PARAMETER(outputWidth);
+	UNREFERENCED_PARAMETER(outputHeight);
+	UNREFERENCED_PARAMETER(remoteName);
+	UNREFERENCED_PARAMETER(remoteDeviceId);
+}
+
+void CAirServerCallback::videoSenderPausedChanged(bool paused,
+	const char* remoteName, const char* remoteDeviceId)
+{
+	UNREFERENCED_PARAMETER(paused);
+	UNREFERENCED_PARAMETER(remoteName);
+	UNREFERENCED_PARAMETER(remoteDeviceId);
 }
 
 void CAirServerCallback::videoPlay(char* url, double volume, double startPos)
@@ -107,6 +134,28 @@ void CAirServerCallback::setVolume(float volume, const char* remoteName, const c
 bool CAirServerCallback::requestPinApproval(const char* remoteAddress, const char* pin)
 {
 	return m_pPlayer != NULL && m_pPlayer->requestPinApproval(remoteAddress, pin);
+}
+
+bool CAirServerCallback::approvePairingRequest(
+	const char* remoteName,
+	const char* remoteDeviceId,
+	const char* remoteModel,
+	const char* remoteOsName,
+	const char* remoteOsVersion,
+	const char* remoteOsBuildVersion,
+	const char* remoteSourceVersion,
+	const char* pairingFingerprint)
+{
+	UNREFERENCED_PARAMETER(remoteDeviceId);
+	UNREFERENCED_PARAMETER(remoteModel);
+	UNREFERENCED_PARAMETER(remoteOsName);
+	UNREFERENCED_PARAMETER(remoteOsVersion);
+	UNREFERENCED_PARAMETER(remoteOsBuildVersion);
+	UNREFERENCED_PARAMETER(remoteSourceVersion);
+	UNREFERENCED_PARAMETER(pairingFingerprint);
+
+	printf("Pairing request received from %s\n", remoteName != NULL ? remoteName : "Unknown device");
+	return true;
 }
 
 double dbDuration = 10000;

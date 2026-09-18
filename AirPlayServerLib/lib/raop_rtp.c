@@ -517,14 +517,36 @@ raop_rtp_thread_udp(void *arg)
                 const void *audiobuf;
                 int audiobuflen;
                 unsigned int pts;
-                uint32_t sample_rate = 0;
-                uint16_t channels = 0;
-                uint16_t bits_per_sample = 0;
+                uint32_t sample_rate;
+                uint16_t channels;
+                uint16_t bits_per_sample;
 
                 buf_ret = raop_buffer_queue(raop_rtp->buffer, packet, packetlen, &raop_rtp->callbacks);
                 assert(buf_ret >= 0);
                 /* Decode all frames in queue */
-                while ((audiobuf = raop_buffer_dequeue(raop_rtp->buffer, &audiobuflen, &pts, no_resend, &sample_rate, &channels, &bits_per_sample))) {
+                while (1) {
+                    /* The dequeue API leaves format outputs untouched for a
+                     * synthesized missing-packet buffer. Reset them before
+                     * every call so a gap cannot inherit the previous valid
+                     * packet's PCM description. */
+                    audiobuflen = 0;
+                    pts = 0;
+                    sample_rate = 0;
+                    channels = 0;
+                    bits_per_sample = 0;
+                    audiobuf = raop_buffer_dequeue(raop_rtp->buffer, &audiobuflen, &pts, no_resend, &sample_rate, &channels, &bits_per_sample);
+                    if (!audiobuf) {
+                        break;
+                    }
+                    if (audiobuflen <= 0 || sample_rate < 8000 || sample_rate > 192000
+                        || channels == 0 || channels > 2 || bits_per_sample != 16
+                        || audiobuflen % (channels * 2) != 0) {
+                        /* Missing RTP packets and failed AAC decodes can leave
+                         * format metadata unset. Never publish those buffers as
+                         * PCM; consumers cannot distinguish them from valid
+                         * audio and may treat the per-packet failures as fatal. */
+                        continue;
+                    }
                     pcm_data_struct pcm_data;
                     pcm_data.data_len = audiobuflen;
                     pcm_data.data = audiobuf;

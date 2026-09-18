@@ -9,6 +9,7 @@ AirPlayServer/lib
 [Rr]eleases/
 /x64/
 /x86/
+/AirPlayServer/lib/x86/
 [Ww][Ii][Nn]32/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/

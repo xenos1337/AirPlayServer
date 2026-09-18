@@ -49,7 +49,7 @@ protected:
 	FgH264DataQueue			m_h264Queue;
 	IAirServerCallback*		m_pCallback;
 
-	AVCodec*				m_pCodec;
+	const AVCodec*			m_pCodec;
 	AVCodecContext*			m_pCodecCtx;
 	SwsContext*				m_pSwsCtx;
 	bool					m_bCodecOpened;

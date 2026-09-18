@@ -20,7 +20,7 @@ public:
 	int start(const char serverName[AIRPLAY_NAME_LEN], 
 		unsigned int raopPort, unsigned int airplayPort,
 		IAirServerCallback* callback, const char* password,
-		unsigned int displayWidth, unsigned int displayHeight);
+		unsigned int displayWidth, unsigned int displayHeight, bool compressedOnly = false);
 	void stop();
 	float setScale(float fRatio);
 
@@ -40,6 +40,21 @@ protected:
 	static void audio_destroy(void* cls, void* session, const char* remoteName, const char* remoteDeviceId);
 	static void video_process(void* cls, h264_decode_struct* data, const char* remoteName, const char* remoteDeviceId);
 	static int pin_request(void* cls, const char* remoteAddress, const char* pin);
+	static void video_report_geometry(void* cls, float sourceWidth, float sourceHeight,
+		float outputWidth, float outputHeight,
+		const char* remoteName, const char* remoteDeviceId);
+	static void video_set_sender_paused(void* cls, int paused,
+		const char* remoteName, const char* remoteDeviceId);
+	static int pairing_request(
+		void* cls,
+		const char* remoteName,
+		const char* remoteDeviceId,
+		const char* remoteModel,
+		const char* remoteOsName,
+		const char* remoteOsVersion,
+		const char* remoteOsBuildVersion,
+		const char* remoteSourceVersion,
+		const char* pairingFingerprint);
 	static void log_callback(void* cls, int level, const char* msg);
 
 	static void ap_video_play(void* cls, char* url, double volume, double start_pos);
@@ -60,5 +75,6 @@ protected:
 	void*					m_mutexMap;
 
 	float					m_fScaleRatio;
+	bool					m_compressedOnly;
 	FgAirplayChannelMap		m_mapChannel;
 };
