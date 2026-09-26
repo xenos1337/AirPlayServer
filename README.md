@@ -51,7 +51,7 @@ This project is an updated fork of [fingergit/airplay2-win](https://github.com/f
 
 ## Install
 
-1. Download [AirPlay2-Win-x64.zip](https://github.com/xenos1337/AirPlayServer/releases/latest).
+1. Download [AirPlayServer-Desktop-Win-x64.zip](https://github.com/xenos1337/AirPlayServer/releases/latest).
 2. Extract the archive.
 3. Install [Bonjour for Windows](https://support.apple.com/kb/DL999) if it is not already installed. iTunes also includes Bonjour.
 4. Run `AirPlayServer.exe`.
