@@ -31,15 +31,9 @@ void CAirServerCallback::connected(const char* remoteName, const char* remoteDev
 	std::wstring name = CFgUtf8Utils::UTF8_To_UTF16(remoteName);
 	wprintf(L"Client connected: %s\n", name.c_str());
 
-	// Update connection state and show the window when a client connects
+	// ImGui accepts the receiver's original UTF-8 device name directly.
 	if (m_pPlayer) {
-		// Convert wide string to UTF-8 for ImGui
-		char deviceNameUtf8[256] = { 0 };
-		if (remoteName) {
-			// Simple conversion - in production, use proper UTF-8 conversion
-			WideCharToMultiByte(CP_UTF8, 0, name.c_str(), -1, deviceNameUtf8, sizeof(deviceNameUtf8), NULL, NULL);
-		}
-		m_pPlayer->setConnected(true, deviceNameUtf8);
+		m_pPlayer->setConnected(true, remoteName != NULL ? remoteName : "");
 		m_pPlayer->requestShowWindow();
 	}
 }
@@ -49,11 +43,8 @@ void CAirServerCallback::disconnected(const char* remoteName, const char* remote
 	memset(m_chRemoteDeviceId, 0, 128);
 	printf("Client disconnected\n");
 
-	// Update connection state - keep window visible to show home screen
 	if (m_pPlayer) {
 		m_pPlayer->setConnected(false, NULL);
-		// Don't hide window - show home screen instead
-		// GPU render loop clears to black each frame, so no explicit clear needed
 	}
 }
 
@@ -111,9 +102,14 @@ void CAirServerCallback::videoGeometryChanged(float sourceWidth, float sourceHei
 void CAirServerCallback::videoSenderPausedChanged(bool paused,
 	const char* remoteName, const char* remoteDeviceId)
 {
-	UNREFERENCED_PARAMETER(paused);
-	UNREFERENCED_PARAMETER(remoteName);
-	UNREFERENCED_PARAMETER(remoteDeviceId);
+	DebugLogger::Write("connection", "video sender %s name=%s device=%s",
+		paused ? "paused" : "resumed", remoteName ? remoteName : "(null)",
+		remoteDeviceId ? remoteDeviceId : "(null)");
+	if (m_pPlayer) {
+		// The sender can keep the network session alive while paused for a later
+		// resume. Retire its last frame and show the home UI until it resumes.
+		m_pPlayer->setConnected(!paused, remoteName);
+	}
 }
 
 void CAirServerCallback::videoPlay(char* url, double volume, double startPos)

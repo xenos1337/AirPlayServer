@@ -38,6 +38,8 @@ public:
 	void unInit();
 	void loopEvents();
 	void setServerName(const char* serverName);
+	void setStartMinimized(bool minimized);
+	void setStartHidden(bool hidden);
 	void setConnected(bool connected, const char* deviceName = NULL);
 	// Called from the receiver's network thread. It waits for the in-app
 	// allow/deny choice, then leaves the temporary PIN visible for the user.
@@ -61,6 +63,13 @@ public:
 	void requestShowWindow();  // Thread-safe: posts event to show window
 	void requestHideWindow();  // Thread-safe: posts event to hide window
 	void requestToggleFullscreen();  // Thread-safe: posts event to toggle fullscreen
+
+	// Notification-area (system tray) integration
+	void addTrayIcon();
+	void removeTrayIcon();
+	void showWindowFromTray();
+	void bringWindowToFront();
+	LRESULT handleTrayMessage(WPARAM wParam, LPARAM lParam);
 
 	// SDL2 window, renderer, and textures (GPU-accelerated)
 	SDL_Window* m_window;
@@ -217,6 +226,9 @@ public:
 	DWORD m_lastNativeResizeRenderTime;
 	bool m_bWindowVisible;
 	bool m_bMainWindowMinimized;
+	bool m_startMinimized;  // Start with the main window minimized (--minimized)
+	bool m_startHidden;     // Start hidden in the notification area (--tray)
+	bool m_trayIconAdded;
 
 	void handleLiveResize(int width, int height);
 	void renderDuringNativeResize();

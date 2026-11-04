@@ -58,6 +58,9 @@ void CAirServer::start(CSDLPlayer* pPlayer, const char* serverName,
 	} else {
 		sprintf_s(finalServerName, 1024, "%s", hostName);
 	}
+	if (!CImGuiManager::IsDeviceNameValid(finalServerName)) {
+		strcpy_s(finalServerName, "AirPlay Receiver");
+	}
     m_pServer = fgServerStartWithDisplay(finalServerName, 5001, 7001,
 		m_pCallback, password, displayWidth, displayHeight);
 }

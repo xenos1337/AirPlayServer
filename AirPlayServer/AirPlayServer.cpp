@@ -1,4 +1,4 @@
-﻿// AirPlayServer.cpp : AirPlay Receiver - Main Program
+// AirPlayServer.cpp : AirPlay Receiver - Main Program
 // Starts automatically and waits for AirPlay connections.
 // Window shows home screen with ImGui UI.
 //
@@ -194,6 +194,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     CSDLPlayer player;
     g_pPlayer = &player;  // Set global pointer for cleanup handlers
     player.setServerName(hostName);
+    if (lpCmdLine && strstr(lpCmdLine, "--minimized")) {
+        player.setStartMinimized(true);
+    }
+    if (lpCmdLine && strstr(lpCmdLine, "--tray")) {
+        player.setStartHidden(true);
+    }
 
     if (!player.init()) {
         DebugLogger::Write("startup", "player initialization failed");
