@@ -26,6 +26,8 @@ public:
 	// Withdraws or restores the Bonjour advertisement without stopping the
 	// receiver, so others stop seeing it while a device is streaming.
 	void setAdvertising(bool enabled);
+	// Ends the active sender's session.
+	void disconnect();
 
 protected:
 	int registerServices();

@@ -141,3 +141,6 @@ out/
 
 # Last build state
 *.lastbuildstate
+
+# Inno Setup output when compiled locally without /O
+installer/Output/

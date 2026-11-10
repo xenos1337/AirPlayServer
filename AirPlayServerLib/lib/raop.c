@@ -908,6 +908,24 @@ raop_destroy(raop_t *raop)
 	}
 }
 
+void
+raop_disconnect_session(raop_t *raop)
+{
+	raop_conn_t *owner;
+
+	assert(raop);
+
+	/* The httpd thread takes owner_mutex while removing a connection, so the
+	 * lock is released before closing; the pointer is only compared there. */
+	MUTEX_LOCK(raop->owner_mutex);
+	owner = raop->owner_conn;
+	MUTEX_UNLOCK(raop->owner_mutex);
+	if (owner != NULL) {
+		logger_log(raop->logger, LOGGER_INFO, "Disconnecting the active sender");
+		httpd_close_connection(raop->httpd, owner);
+	}
+}
+
 int
 raop_is_running(raop_t *raop)
 {

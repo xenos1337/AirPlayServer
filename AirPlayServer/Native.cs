@@ -126,6 +126,10 @@ internal static unsafe partial class Native
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial void RestartReceiver();
 
+    [LibraryImport(Core, EntryPoint = "ap_disconnect")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial void Disconnect();
+
     [LibraryImport(Core, EntryPoint = "ap_set_capture_privacy")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial void SetCapturePrivacy(int enabled);

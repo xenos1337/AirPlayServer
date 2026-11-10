@@ -298,6 +298,13 @@ void FgAirplayServer::setAdvertising(bool enabled)
 	}
 }
 
+void FgAirplayServer::disconnect()
+{
+	if (m_pRaop != NULL) {
+		raop_disconnect_session(m_pRaop);
+	}
+}
+
 void FgAirplayServer::stop()
 {
 	// First, stop accepting new connections by unregistering DNS-SD

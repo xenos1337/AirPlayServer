@@ -231,6 +231,7 @@ CSDLPlayer::CSDLPlayer()
 	, m_serverStopRequested(false)
 	, m_serverStopTimedOut(false)
 	, m_advertisingChangeRequested(false)
+	, m_disconnectRequested(false)
 	, m_advertising(true)
 	, m_serverState(AP_SERVER_OFFLINE)
 	, m_serverStartRequestTime(0)
@@ -409,6 +410,7 @@ void CSDLPlayer::serverThread()
 		bool startRequested;
 		bool advertisingRequested;
 		bool advertising;
+		bool disconnectRequested;
 		SServerRequest request;
 		{
 			CAutoLock oLock(m_mutexServer, "serverRequest");
@@ -416,12 +418,17 @@ void CSDLPlayer::serverThread()
 			startRequested = m_serverStartRequested;
 			advertisingRequested = m_advertisingChangeRequested;
 			advertising = m_advertising;
+			disconnectRequested = m_disconnectRequested;
+			m_disconnectRequested = false;
 			request = m_serverRequest;
 			m_serverStartRequested = false;
 			m_advertisingChangeRequested = false;
 		}
 		if (stopRequested) {
 			break;
+		}
+		if (disconnectRequested) {
+			m_server.disconnectSender();
 		}
 		if (!startRequested) {
 			if (advertisingRequested) {
@@ -486,6 +493,15 @@ void CSDLPlayer::requestAdvertising(bool enabled)
 		CAutoLock oLock(m_mutexServer, "requestAdvertising");
 		m_advertising = enabled;
 		m_advertisingChangeRequested = true;
+	}
+	SetEvent(m_serverWake);
+}
+
+void CSDLPlayer::requestDisconnect()
+{
+	{
+		CAutoLock oLock(m_mutexServer, "requestDisconnect");
+		m_disconnectRequested = true;
 	}
 	SetEvent(m_serverWake);
 }

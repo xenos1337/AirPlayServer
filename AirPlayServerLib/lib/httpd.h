@@ -36,6 +36,8 @@ int httpd_is_running(httpd_t *httpd);
 
 int httpd_start(httpd_t *httpd, unsigned short *port);
 void httpd_stop(httpd_t *httpd);
+/* Ends the connection whose conn_init returned user_data. Any thread. */
+void httpd_close_connection(httpd_t *httpd, void *user_data);
 
 void httpd_destroy(httpd_t *httpd);
 

@@ -47,6 +47,8 @@ internal sealed class Settings
     public bool RequirePin;
     public bool HidePin = true;
     public int LocalVolume = 100;
+    public bool CheckForUpdates = true;
+    public string IgnoredVersion = "";
 
     public static int ClampReceiverDimension(int value, int minimum, int maximum)
     {
@@ -95,6 +97,8 @@ internal sealed class Settings
         settings.RequirePin = settings.ReadInt("Security", "RequirePin", 0) != 0;
         settings.HidePin = settings.ReadInt("Security", "HidePin", 1) != 0;
         settings.LocalVolume = Math.Clamp(settings.ReadInt("Audio", "LocalVolume", 100), 0, 100);
+        settings.CheckForUpdates = settings.ReadInt("Updates", "CheckForUpdates", 1) != 0;
+        settings.IgnoredVersion = settings.ReadString("Updates", "IgnoredVersion", "");
 
         // Earlier versions had a third, collapsed "launcher" state. The controls
         // panel is either shown or hidden; only an explicit hide keeps it hidden.
@@ -139,6 +143,8 @@ internal sealed class Settings
         Write("General", "OverlayState", (ShowControls ? OverlayExpanded : OverlayHidden).ToString());
         Write("General", "ShowOverlay", Flag(ShowControls));
         Write("Audio", "LocalVolume", LocalVolume.ToString());
+        Write("Updates", "CheckForUpdates", Flag(CheckForUpdates));
+        Write("Updates", "IgnoredVersion", IgnoredVersion.Length > 0 ? IgnoredVersion : null);
         try
         {
             ini.Save();

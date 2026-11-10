@@ -16,10 +16,12 @@ This project is an updated fork of [fingergit/airplay2-win](https://github.com/f
 
 ## Install
 
-1. Download [AirPlayServer-Desktop-Win-x64.zip](https://github.com/xenos1337/AirPlayServer/releases/latest).
-2. Extract the archive.
-3. Install [Bonjour for Windows](https://support.apple.com/kb/DL999) if it is not already installed. iTunes also includes Bonjour.
-4. Run `AirPlayServer.exe`.
+1. Install [Bonjour for Windows](https://support.apple.com/kb/DL999) if it is not already installed. iTunes also includes Bonjour.
+2. From the [latest release](https://github.com/xenos1337/AirPlayServer/releases/latest), download one of:
+   - `AirPlayServer-Setup-x64.exe`: the installer. It also installs the .NET 10 Desktop Runtime if needed and allows the app through Windows Firewall.
+   - `AirPlayServer-Portable-x64.zip`: extract it anywhere and run `AirPlayServer.exe`. Needs the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (x64).
+
+AirPlay Server checks GitHub for a newer release once a day and offers to open its download page; turn this off in `Settings`.
 
 The app warns you at startup if Bonjour is missing. If its service is not running, the app offers to start it; Windows asks for administrator permission. If the receiver becomes unavailable later, the home screen shows a `Restart Bonjour service` button.
 
@@ -96,7 +98,7 @@ Enable `Require PIN` in `Settings` to approve new connections with a temporary f
 | Left-drag while zoomed | Pan the video |
 | Mouse movement | Show the cursor; it hides after five seconds |
 
-While a device is connected, the session controls are shown in a panel beside the video. Hide it with the arrow button at its top or `H`; the arrow on the right edge brings it back. They include `Hide from captures`, which keeps the receiver visible on the local monitor, excludes its window from supported Windows capture APIs, and sends a black frame to the clean feed. Turn the switch off or press `Ctrl+Shift+H` to end it.
+While a device is connected, the session controls are shown in a panel beside the video. Hide it with the arrow button at its top or `H`; the arrow on the right edge brings it back. Closing the window during a session ends the session and returns to the home screen. They include `Hide from captures`, which keeps the receiver visible on the local monitor, excludes its window from supported Windows capture APIs, and sends a black frame to the clean feed. Turn the switch off or press `Ctrl+Shift+H` to end it.
 
 Select `Picture in picture` or press `P` to open a small, borderless window that stays above other apps. PiP keeps the current device's aspect ratio when resized. Drag the strip along the top to move it, and use its close button or press `P` again to restore the previous window size, position, and maximized state. PiP also closes when the device disconnects.
 

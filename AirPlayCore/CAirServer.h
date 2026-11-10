@@ -19,6 +19,7 @@ public:
 		unsigned int displayWidth, unsigned int displayHeight);
 	bool isRunning() const { return m_pServer != NULL; }
 	void setAdvertising(bool enabled);
+	void disconnectSender();
 	float setVideoScale(float fRatio);
 
 private:

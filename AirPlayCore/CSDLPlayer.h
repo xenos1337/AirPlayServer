@@ -52,6 +52,8 @@ public:
 	void dismissPinApproval(LONG generation);
 	// Re-registers the receiver with Bonjour once no device is connected.
 	void requestRestart();
+	// Ends the connected sender's session.
+	void requestDisconnect();
 
 	static void getMonitorSize(HWND window, unsigned int& width, unsigned int& height);
 
@@ -257,6 +259,7 @@ private:
 	bool m_serverStopRequested;
 	bool m_serverStopTimedOut;
 	bool m_advertisingChangeRequested;
+	bool m_disconnectRequested;
 	bool m_advertising;
 	volatile LONG m_serverState;  // AP_SERVER_*
 	DWORD m_serverStartRequestTime;  // Render thread only

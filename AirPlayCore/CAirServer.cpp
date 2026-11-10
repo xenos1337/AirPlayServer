@@ -87,6 +87,11 @@ void CAirServer::setAdvertising(bool enabled)
 	fgServerSetAdvertising(m_pServer, enabled ? 1 : 0);
 }
 
+void CAirServer::disconnectSender()
+{
+	fgServerDisconnect(m_pServer);
+}
+
 float CAirServer::setVideoScale(float fRatio)
 {
     return fgServerScale(m_pServer, fRatio);
