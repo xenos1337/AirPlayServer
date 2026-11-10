@@ -46,6 +46,9 @@ struct httpd_s {
 	thread_handle_t thread;
 	mutex_handle_t run_mutex;
 
+	/* Guards connection slots against httpd_close_connection() */
+	mutex_handle_t connections_mutex;
+
 	/* Server fds for accepting connections */
 	int server_fd4;
 	int server_fd6;
@@ -82,6 +85,7 @@ httpd_init(logger_t *logger, httpd_callbacks_t *callbacks, int max_connections)
 	/* Initial status joined */
 	httpd->running = 0;
 	httpd->joined = 1;
+	MUTEX_CREATE(httpd->connections_mutex);
 
 	return httpd;
 }
@@ -92,6 +96,7 @@ httpd_destroy(httpd_t *httpd)
 	if (httpd) {
 		httpd_stop(httpd);
 
+		MUTEX_DESTROY(httpd->connections_mutex);
 		free(httpd->connections);
 		free(httpd);
 	}
@@ -121,9 +126,11 @@ httpd_add_connection(httpd_t *httpd, int fd, unsigned char *local, int local_len
 	}
 
 	httpd->open_connections++;
+	MUTEX_LOCK(httpd->connections_mutex);
 	httpd->connections[i].socket_fd = fd;
 	httpd->connections[i].connected = 1;
 	httpd->connections[i].user_data = user_data;
+	MUTEX_UNLOCK(httpd->connections_mutex);
 	return 0;
 }
 
@@ -175,10 +182,32 @@ httpd_remove_connection(httpd_t *httpd, http_connection_t *connection)
 		connection->request = NULL;
 	}
 	httpd->callbacks.conn_destroy(connection->user_data);
+	MUTEX_LOCK(httpd->connections_mutex);
 	shutdown(connection->socket_fd, SHUT_WR);
 	closesocket(connection->socket_fd);
 	connection->connected = 0;
+	MUTEX_UNLOCK(httpd->connections_mutex);
 	httpd->open_connections--;
+}
+
+void
+httpd_close_connection(httpd_t *httpd, void *user_data)
+{
+	int i;
+
+	assert(httpd);
+
+	/* The lock keeps the descriptor from being closed and reused while it is
+	 * shut down here. The httpd thread then sees the connection end and
+	 * removes it through the usual path. */
+	MUTEX_LOCK(httpd->connections_mutex);
+	for (i = 0; i < httpd->max_connections; i++) {
+		if (httpd->connections[i].connected && httpd->connections[i].user_data == user_data) {
+			shutdown(httpd->connections[i].socket_fd, SHUT_RDWR);
+			break;
+		}
+	}
+	MUTEX_UNLOCK(httpd->connections_mutex);
 }
 
 static THREAD_RETVAL

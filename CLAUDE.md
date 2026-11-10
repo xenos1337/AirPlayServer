@@ -36,6 +36,10 @@ Everything lands in `x64\<Configuration>\` (x86: `<Configuration>\`):
 
 AirPlayCore's post-build step copies SDL2, FFmpeg and plist DLLs.
 
+### Releases
+
+Pushing a `vX.Y.Z` tag makes CI build with `/p:Version=X.Y.Z`, package `AirPlayServer-Portable-x64.zip` and the Inno Setup installer `AirPlayServer-Setup-x64.exe` (`installer/AirPlayServer.iss`), attest both and publish the release. Untagged builds are version 0.0.0; the in-app update check (`UpdateChecker.cs`, GitHub latest-release API) skips them.
+
 ### Build Caveats
 
 - airplay2dll links `libplist.a` from a hardcoded MSYS2 path (`C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0`). CI creates the directory.

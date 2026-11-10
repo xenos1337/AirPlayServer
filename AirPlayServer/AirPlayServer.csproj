@@ -18,6 +18,8 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- CI sets the release tag's version; local builds stay 0.0.0 and skip update checks. -->
+    <Version>0.0.0</Version>
   </PropertyGroup>
 
   <!-- Build next to AirPlayCore.dll and the other native DLLs. -->

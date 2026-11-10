@@ -1,0 +1,19 @@
+<Window x:Class="AirPlayServer.UpdateWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Update available" Width="420" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <StackPanel Margin="24">
+        <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE896;" FontSize="32"
+                   Foreground="{DynamicResource AccentFillColorDefaultBrush}"/>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource SubtitleTextBlockStyle}"
+                   Margin="0,12,0,0" TextWrapping="Wrap"/>
+        <TextBlock x:Name="DetailText" TextWrapping="Wrap" Margin="0,8,0,0"/>
+        <UniformGrid Columns="2" Margin="0,24,0,0">
+            <Button Content="Update" Margin="0,0,4,0" HorizontalAlignment="Stretch" IsDefault="True"
+                    Style="{DynamicResource AccentButtonStyle}" Click="Update_Click"/>
+            <Button Content="Ignore this version" Margin="4,0,0,0" HorizontalAlignment="Stretch"
+                    Click="Ignore_Click"/>
+        </UniformGrid>
+    </StackPanel>
+</Window>

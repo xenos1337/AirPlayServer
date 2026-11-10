@@ -98,6 +98,7 @@ AP_API void __cdecl ap_set_config(const ApConfig* config);
 AP_API int __cdecl ap_rotate(void);
 AP_API void __cdecl ap_reset_view(void);
 AP_API void __cdecl ap_restart_receiver(void);
+AP_API void __cdecl ap_disconnect(void);
 AP_API void __cdecl ap_set_capture_privacy(int enabled);
 AP_API void __cdecl ap_get_stats(ApStats* stats);
 AP_API void __cdecl ap_pin_answer(int generation, int allow);

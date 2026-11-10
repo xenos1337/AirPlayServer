@@ -37,6 +37,10 @@ public partial class SettingsWindow : Window
         AutoStartCheck.IsChecked = Settings.QueryAutoStart();
         RequirePinCheck.IsChecked = settings.RequirePin;
         HidePinCheck.IsChecked = settings.HidePin;
+        CheckForUpdatesCheck.IsChecked = settings.CheckForUpdates;
+        VersionText.Text = UpdateChecker.IsReleaseBuild
+            ? $"Looks for new releases on GitHub once a day. This is version {UpdateChecker.CurrentVersion}."
+            : "Looks for new releases on GitHub once a day. Development builds are not checked.";
         suppressEvents = false;
         UpdateVisibility();
     }
@@ -146,6 +150,7 @@ public partial class SettingsWindow : Window
         settings.HideToTrayOnDisconnect = HideOnDisconnectCheck.IsChecked == true;
         settings.RequirePin = RequirePinCheck.IsChecked == true;
         settings.HidePin = HidePinCheck.IsChecked == true;
+        settings.CheckForUpdates = CheckForUpdatesCheck.IsChecked == true;
         UpdateVisibility();
         applySettings();
     }

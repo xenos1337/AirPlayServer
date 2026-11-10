@@ -53,6 +53,13 @@ void fgServerSetAdvertising(void* handle, int enabled)
 	}
 }
 
+void fgServerDisconnect(void* handle)
+{
+	if (handle != NULL) {
+		((FgAirplayServer*)handle)->disconnect();
+	}
+}
+
 float fgServerScale(void* handle, float fRatio)
 {
 	if (handle != NULL) {

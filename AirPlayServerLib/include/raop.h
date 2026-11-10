@@ -82,6 +82,8 @@ RAOP_API void *raop_get_callback_cls(raop_t *raop);
 RAOP_API int raop_start(raop_t *raop, unsigned short *port);
 RAOP_API int raop_is_running(raop_t *raop);
 RAOP_API void raop_stop(raop_t *raop);
+/* Ends the active sender's session; the sender sees the receiver disconnect. */
+RAOP_API void raop_disconnect_session(raop_t *raop);
 
 RAOP_API void raop_destroy(raop_t *raop);
 

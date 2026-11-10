@@ -34,6 +34,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer statsTimer;
     private readonly DispatcherTimer disconnectTimer;
     private readonly DispatcherTimer saveTimer;
+    private readonly DispatcherTimer updateTimer;
+    private UpdateInfo? pendingUpdate;
+    private bool updatePromptOpen;
     private readonly Forms.NotifyIcon tray;
     private nint hwnd;
     private VideoHost? videoHost;
@@ -50,6 +53,7 @@ public partial class MainWindow : Window
     private int videoHeight;
     private int rotation;
     private bool videoReady;
+    private bool closingSession;  // The user closed the window to end the session
     private FirewallStatus firewallStatus = FirewallStatus.Allowed;
     private bool firewallCheckRunning;
     private bool controlsPanelShown;
@@ -91,6 +95,15 @@ public partial class MainWindow : Window
             settings.Save();
         };
         tray = CreateTray();
+        // First check shortly after start, then once a day.
+        updateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        updateTimer.Tick += (_, _) =>
+        {
+            updateTimer.Interval = TimeSpan.FromDays(1);
+            CheckForUpdates();
+        };
+        IsVisibleChanged += (_, _) => ShowPendingUpdate();
+        StateChanged += (_, _) => ShowPendingUpdate();
 
         ScreenCastCheck.IsChecked = settings.ScreenCastEnabled;
         HideInterfaceCheck.IsChecked = settings.ScreenCastHideInterface;
@@ -125,6 +138,7 @@ public partial class MainWindow : Window
         RefreshStats();
         statsTimer.Start();
         CheckFirewall();
+        updateTimer.Start();
         // Re-check after the user returns, e.g. from network settings.
         Activated += (_, _) =>
         {
@@ -134,6 +148,42 @@ public partial class MainWindow : Window
             }
         };
         return true;
+    }
+
+    private async void CheckForUpdates()
+    {
+        if (!settings.CheckForUpdates || !UpdateChecker.IsReleaseBuild)
+        {
+            return;
+        }
+        UpdateInfo? update = await UpdateChecker.CheckAsync();
+        if (update == null || update.Tag == settings.IgnoredVersion)
+        {
+            return;
+        }
+        pendingUpdate = update;
+        ShowPendingUpdate();
+    }
+
+    // Waits for a visible, idle window: never mid-session or from the tray.
+    private void ShowPendingUpdate()
+    {
+        if (pendingUpdate == null || updatePromptOpen || quitting || connected ||
+            !IsVisible || WindowState == WindowState.Minimized)
+        {
+            return;
+        }
+        UpdateInfo update = pendingUpdate;
+        pendingUpdate = null;
+        updatePromptOpen = true;
+        UpdateWindow prompt = new(update) { Owner = this };
+        prompt.ShowDialog();
+        updatePromptOpen = false;
+        if (prompt.Ignored)
+        {
+            settings.IgnoredVersion = update.Tag;
+            ScheduleSave();
+        }
     }
 
     private async void CheckFirewall()
@@ -162,6 +212,7 @@ public partial class MainWindow : Window
             statsTimer.Stop();
             disconnectTimer.Stop();
             saveTimer.Stop();
+            updateTimer.Stop();
             pinWindow?.Close();
             perfWindow?.Close();
             settings.Save();
@@ -218,13 +269,15 @@ public partial class MainWindow : Window
             }
             SetCapturePrivacy(false);
             perfWindow?.Close();
-            if (settings.HideToTrayOnDisconnect)
+            if (settings.HideToTrayOnDisconnect && !closingSession)
             {
                 Hide();
             }
+            closingSession = false;
             disconnectNotice = true;
             disconnectTimer.Stop();
             disconnectTimer.Start();
+            ShowPendingUpdate();
         }
         UpdateView();
     }
@@ -941,7 +994,13 @@ public partial class MainWindow : Window
             return;
         }
         e.Cancel = true;
-        if (settings.MinimizeOnClose)
+        if (connected)
+        {
+            // Closing during a session ends it and returns to the home screen.
+            closingSession = true;
+            Native.Disconnect();
+        }
+        else if (settings.MinimizeOnClose)
         {
             Hide();
         }

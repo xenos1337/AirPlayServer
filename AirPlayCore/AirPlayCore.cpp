@@ -138,6 +138,13 @@ AP_API void __cdecl ap_restart_receiver(void)
 	}
 }
 
+AP_API void __cdecl ap_disconnect(void)
+{
+	if (g_player != NULL) {
+		g_player->requestDisconnect();
+	}
+}
+
 AP_API void __cdecl ap_set_capture_privacy(int enabled)
 {
 	if (g_player != NULL) {

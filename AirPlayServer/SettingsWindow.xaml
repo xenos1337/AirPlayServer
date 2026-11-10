@@ -73,7 +73,7 @@
                         <StackPanel Margin="0,0,16,0">
                             <TextBlock Text="Hide to system tray when closing the window"/>
                             <TextBlock Style="{StaticResource Description}"
-                                       Text="The close button hides the window; use Quit here or in the tray menu to exit"/>
+                                       Text="When idle, the close button hides the window; use Quit here or in the tray menu to exit"/>
                         </StackPanel>
                     </DockPanel>
                 </Border>
@@ -98,6 +98,16 @@
                             <TextBlock Text="Start AirPlay Server when you sign in"/>
                             <TextBlock Style="{StaticResource Description}"
                                        Text="Starts in the system tray for the current user"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <DockPanel>
+                        <CheckBox x:Name="CheckForUpdatesCheck" DockPanel.Dock="Right" Style="{StaticResource ToggleSwitch}"
+                                  VerticalAlignment="Center" Click="Option_Click"/>
+                        <StackPanel Margin="0,0,16,0">
+                            <TextBlock Text="Check for updates"/>
+                            <TextBlock x:Name="VersionText" Style="{StaticResource Description}"/>
                         </StackPanel>
                     </DockPanel>
                 </Border>
