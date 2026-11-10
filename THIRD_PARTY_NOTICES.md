@@ -48,7 +48,7 @@ generated source archives.
 
 ## Other vendored source
 
-The repository also contains cryptographic, networking, SDL, ImGui, and sample
+The repository also contains cryptographic, networking, SDL, and sample
 application code that is not part of MirrorSim's five-file headless runtime in
 every build. Their original copyright and license notices remain with their
 source files and directories.

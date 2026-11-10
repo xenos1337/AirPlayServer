@@ -95,45 +95,36 @@ iOS Device                           Windows PC
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  VIDEO RENDERING (CSDLPlayer::outputVideo) - CALLBACK THREAD     │
-│  1. Lock m_mutexVideo                                            │
-│  2. Check if video dimensions changed → recreate buffer          │
-│  3. Lock m_videoBuffer surface                                   │
-│  4. Clear to black (letterbox/pillarbox)                         │
-│  5. FOR EACH PIXEL:                                              │
-│     - Read YUV values from data planes                           │
-│     - Convert YUV → RGB using BT.601:                            │
-│       r = Y + 1.402 * (V - 128)                                  │
-│       g = Y - 0.344 * (U - 128) - 0.714 * (V - 128)              │
-│       b = Y + 1.772 * (U - 128)                                  │
-│     - Write RGB pixel to m_videoBuffer                           │
-│  6. Unlock m_videoBuffer                                         │
-│  7. Set m_hasNewFrame = true                                     │
-│  8. Store m_lastFramePTS                                         │
-│  9. Unlock m_mutexVideo                                          │
+│  FRAME COPY (CSDLPlayer::outputVideo) - CALLBACK THREAD          │
+│  1. If the size changed, ask the render thread to reallocate     │
+│  2. Lock m_mutexVideo                                            │
+│  3. Copy the Y, U and V planes into the write half of the        │
+│     YUV double buffer                                            │
+│  4. Publish it: swap read/write index, set m_yuvReady            │
+│  5. Unlock m_mutexVideo                                          │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  MAIN RENDER LOOP (CSDLPlayer::loopEvents) - MAIN THREAD         │
-│  Running at 30 FPS:                                              │
+│  RENDER LOOP (CSDLPlayer::loopEvents) - AIRPLAYCORE RENDER THREAD│
+│  Paced to 60 FPS (30 FPS with the Best preset):                  │
 │                                                                   │
-│  1. frameStartTime = GetTickCount()                              │
-│  2. Poll SDL events (keyboard, mouse, resize)                    │
-│  3. Lock m_mutexVideo                                            │
-│  4. SDL_BlitSurface(m_videoBuffer → m_surface)                   │
-│     ↳ Copy off-screen buffer to screen surface                   │
-│  5. m_hasNewFrame = false                                        │
-│  6. ImGui::NewFrame()                                            │
-│  7. Render UI overlay:                                           │
-│     - Home screen (disconnected)                                 │
-│     - Connection status (connected)                              │
-│  8. ImGui::Render() → Draw to m_surface with alpha blending      │
-│  9. SDL_Flip(m_surface) → Display to screen                      │
-│  10. Unlock m_mutexVideo                                         │
-│  11. Calculate frame time                                        │
-│  12. SDL_Delay(33 - frameTime) → Cap at 30 FPS                   │
+│  1. Copy the settings pushed by the WPF app (ap_set_config)      │
+│  2. Poll SDL events for the video child window (resize, mouse    │
+│     zoom/pan/double-click)                                       │
+│  3. Apply rotation/zoom requests, restart the receiver if its    │
+│     name, PIN policy or resolution changed while idle            │
+│  4. If a new frame is ready and the frame interval has passed,   │
+│     SDL_UpdateYUVTexture (the GPU converts YUV to RGB and scales)│
+│  5. SDL_RenderCopyEx into the child window, render the clean     │
+│     feed, SDL_RenderPresent                                      │
+│  6. Update the stats snapshot the WPF app polls (ap_get_stats)   │
+│  7. Sleep, then spin for the rest of the frame interval          │
 └─────────────────────────────────────────────────────────────────┘
+
+The video child window belongs to this thread and is hosted inside the WPF
+window with an HwndHost. All other UI (home screen, controls, settings, PIN
+prompt, tray) is WPF on the UI thread.
 ```
 
 ---
@@ -169,12 +160,12 @@ Network → raop.c → AAC Decoding → outputAudio() callback
 3. VIDEO STARTS
    └→ H.264 packets arrive
    └→ Decoded to YUV frames
-   └→ Callback thread writes to m_videoBuffer
-   └→ Main thread blits and displays at 30 FPS
+   └→ Callback thread copies them into the YUV double buffer
+   └→ Render thread uploads and presents them at 60 FPS
 
 4. USER WATCHES
    └→ Video plays smoothly
-   └→ ImGui overlay shows connection info
+   └→ Controls panel beside the video shows connection info
    └→ Can press H to hide UI
    └→ Can double-click for fullscreen
 

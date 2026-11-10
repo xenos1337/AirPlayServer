@@ -54,5 +54,7 @@ AIRPLAYSERVER_API void* fgServerStartHeadless(const char serverName[AIRPLAY_NAME
 	unsigned int raopPort, unsigned int airplayPort,
 	IAirServerCallback* callback);
 AIRPLAYSERVER_API void fgServerStop(void* handle);
+// Withdraws (0) or restores (1) the Bonjour advertisement of a running server.
+AIRPLAYSERVER_API void fgServerSetAdvertising(void* handle, int enabled);
 
 AIRPLAYSERVER_API float fgServerScale(void* handle, float fRatio);

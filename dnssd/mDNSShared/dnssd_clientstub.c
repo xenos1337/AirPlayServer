@@ -606,8 +606,20 @@ static DNSServiceErrorType ConnectToServer(DNSServiceRef *ref, DNSServiceFlags f
             // then we give up and return a failure code.
             if (++NumTries < DNSSD_CLIENT_MAXTRIES)
             {
-                syslog(LOG_WARNING, "dnssd_clientstub ConnectToServer: connect()-> No of tries: %d", NumTries);  
+                syslog(LOG_WARNING, "dnssd_clientstub ConnectToServer: connect()-> No of tries: %d", NumTries);
                 sleep(1); // Sleep a bit, then try again
+                #if defined(USE_TCP_LOOPBACK)
+                // Winsock cannot connect() again on a socket whose connection
+                // attempt failed, so every retry on it fails. Use a fresh one.
+                dnssd_close(sdr->sockfd);
+                sdr->sockfd    = socket(AF_DNSSD, SOCK_STREAM, 0);
+                sdr->validator = sdr->sockfd ^ ValidatorBits;
+                if (!dnssd_SocketValid(sdr->sockfd))
+                {
+                    FreeDNSServiceOp(sdr);
+                    return kDNSServiceErr_NoMemory;
+                }
+                #endif
             }
             else 
             {

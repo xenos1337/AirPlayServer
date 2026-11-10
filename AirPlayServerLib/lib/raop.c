@@ -59,6 +59,13 @@ struct raop_s {
 	unsigned int display_width;
 	unsigned int display_height;
 
+	/* Only one sender may stream at a time. The owner is identified by its
+	 * address so the same sender can reconnect on a new control connection. */
+	mutex_handle_t owner_mutex;
+	struct raop_conn_s *owner_conn;
+	unsigned char owner_remote[16];
+	int owner_remotelen;
+
     unsigned short port;
 };
 
@@ -81,6 +88,76 @@ struct raop_conn_s {
 
 };
 typedef struct raop_conn_s raop_conn_t;
+
+static int
+raop_is_session_owner_address(raop_t *raop, raop_conn_t *conn)
+{
+	return raop->owner_remotelen == conn->remotelen &&
+		memcmp(raop->owner_remote, conn->remote, (size_t)conn->remotelen) == 0;
+}
+
+/* Returns 1 when no other sender is streaming. */
+static int
+raop_session_available(raop_conn_t *conn)
+{
+	raop_t *raop = conn->raop;
+	int available;
+
+	MUTEX_LOCK(raop->owner_mutex);
+	available = raop->owner_conn == NULL || raop_is_session_owner_address(raop, conn);
+	MUTEX_UNLOCK(raop->owner_mutex);
+	return available;
+}
+
+/* Makes conn the streaming sender. Returns 0 if another sender owns the
+ * session. */
+static int
+raop_claim_session(raop_conn_t *conn)
+{
+	raop_t *raop = conn->raop;
+	int claimed;
+
+	if (conn->remotelen <= 0 || conn->remotelen > (int)sizeof(raop->owner_remote)) {
+		return 0;
+	}
+	MUTEX_LOCK(raop->owner_mutex);
+	claimed = raop->owner_conn == NULL || raop_is_session_owner_address(raop, conn);
+	if (claimed) {
+		raop->owner_conn = conn;
+		memcpy(raop->owner_remote, conn->remote, (size_t)conn->remotelen);
+		raop->owner_remotelen = conn->remotelen;
+	}
+	MUTEX_UNLOCK(raop->owner_mutex);
+	return claimed;
+}
+
+static void
+raop_release_session(raop_conn_t *conn)
+{
+	raop_t *raop = conn->raop;
+
+	MUTEX_LOCK(raop->owner_mutex);
+	if (raop->owner_conn == conn) {
+		raop->owner_conn = NULL;
+		raop->owner_remotelen = 0;
+	}
+	MUTEX_UNLOCK(raop->owner_mutex);
+}
+
+/* The status an Apple TV returns while another sender is streaming. */
+static void
+raop_respond_busy(raop_conn_t *conn, const char *protocol, const char *cseq,
+	http_response_t **response)
+{
+	logger_log(conn->raop->logger, LOGGER_INFO, "Rejecting SETUP: another sender is streaming");
+	http_response_destroy(*response);
+	*response = http_response_init(protocol, 453, "Not Enough Bandwidth");
+	if (cseq != NULL) {
+		http_response_add_header(*response, "CSeq", cseq);
+	}
+	http_response_add_header(*response, "Server", "AirTunes/845.5.1");
+	http_response_finish(*response, NULL, 0);
+}
 
 #include "raop_handlers.h"
 
@@ -618,11 +695,20 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 	http_response_add_header(*response, "Server", "AirTunes/845.5.1");
 
 	logger_log(conn->raop->logger, LOGGER_DEBUG, "Handling request %s with URL %s", method, url);
+	// While one sender streams, others are refused before any password prompt.
+	if (!strcmp(method, "SETUP") && !raop_session_available(conn)) {
+		raop_respond_busy(conn, protocol, cseq, response);
+		return;
+	}
 	// AirPlay's password prompt is triggered by the first SETUP. Pairing and
 	// capability requests must remain available so the sender can reach it.
 	if (!strcmp(method, "SETUP") &&
 		!conn_require_password(conn, request, response, cseq)) {
 		http_response_finish(*response, NULL, 0);
+		return;
+	}
+	if (!strcmp(method, "SETUP") && !raop_claim_session(conn)) {
+		raop_respond_busy(conn, protocol, cseq, response);
 		return;
 	}
 	raop_handler_t handler = NULL;
@@ -720,6 +806,7 @@ conn_destroy(void *ptr)
 {
 	raop_conn_t *conn = ptr;
 	logger_log(conn->raop->logger, LOGGER_INFO, "RAOP control connection closed");
+	raop_release_session(conn);
 
 	if (conn->raop_rtp) {
 		/* This is done in case TEARDOWN was not called */
@@ -792,6 +879,7 @@ raop_init_with_seed(int max_clients, raop_callbacks_t *callbacks, const unsigned
 		free(raop);
 		return NULL;
 	}
+	MUTEX_CREATE(raop->owner_mutex);
 	/* Copy callbacks structure */
 	memcpy(&raop->callbacks, callbacks, sizeof(raop_callbacks_t));
 	raop->pairing = pairing;
@@ -812,6 +900,7 @@ raop_destroy(raop_t *raop)
 		pairing_destroy(raop->pairing);
 		httpd_destroy(raop->httpd);
 		logger_destroy(raop->logger);
+		MUTEX_DESTROY(raop->owner_mutex);
 		free(raop);
 
 		/* Cleanup the network */

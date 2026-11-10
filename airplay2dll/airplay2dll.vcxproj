@@ -107,8 +107,7 @@
       <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;AirPlayLib.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /e include\*.* $(AirPlayServerDir)include\
-xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
+      <Command>xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 xcopy /y /e $(OutDir)$(ProjectName).lib $(AirPlayServerDir)lib\$(PlatformTarget)\
 xcopy /y /e $(ExternalDir)ffmpeg\lib\$(PlatformTarget)\*.dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 </Command>
@@ -132,8 +131,7 @@ xcopy /y /e $(ExternalDir)ffmpeg\lib\$(PlatformTarget)\*.dll $(AirPlayServerDir)
       <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;AirPlayLib.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /e include\*.* $(AirPlayServerDir)include\
-xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
+      <Command>xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 xcopy /y /e $(OutDir)$(ProjectName).lib $(AirPlayServerDir)lib\$(PlatformTarget)\
 xcopy /y /e $(ExternalDir)ffmpeg\lib\$(PlatformTarget)\*.dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 </Command>
@@ -162,8 +160,7 @@ xcopy /y /e $(ExternalDir)ffmpeg\lib\$(PlatformTarget)\*.dll $(AirPlayServerDir)
       <AdditionalOptions>/SAFESEH:NO %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /e include\*.* $(AirPlayServerDir)include\
-xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
+      <Command>xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 xcopy /y /e $(OutDir)$(ProjectName).lib $(AirPlayServerDir)lib\$(PlatformTarget)\
 xcopy /y /e $(ExternalDir)ffmpeg\lib\$(PlatformTarget)\*.dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 </Command>
@@ -191,8 +188,7 @@ xcopy /y /e $(ExternalDir)ffmpeg\lib\$(PlatformTarget)\*.dll $(AirPlayServerDir)
       <AdditionalDependencies>ws2_32.lib;winmm.lib;libplist.a;AirPlayLib.lib;avcodec.lib;swscale.lib;avutil.lib;legacy_stdio_definitions.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /e include\*.* $(AirPlayServerDir)include\
-xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
+      <Command>xcopy /y /e $(OutDir)$(ProjectName).dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 xcopy /y /e $(OutDir)$(ProjectName).lib $(AirPlayServerDir)lib\$(PlatformTarget)\
 xcopy /y /e $(ExternalDir)ffmpeg\lib\$(PlatformTarget)\*.dll $(AirPlayServerDir)bin\$(PlatformTarget)\
 </Command>

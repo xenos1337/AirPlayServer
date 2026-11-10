@@ -134,6 +134,11 @@ FgAirplayServer::FgAirplayServer()
 	, m_pRaop(NULL)
 	, m_fScaleRatio(1.0f)
 	, m_compressedOnly(false)
+	, m_raopPort(0)
+	, m_airplayPort(0)
+	, m_hwaddr()
+	, m_pinRequired(false)
+	, m_advertising(false)
 {
 	memset(&m_stAirplayCB, 0, sizeof(airplay_callbacks_t));
 	memset(&m_stRaopCB, 0, sizeof(raop_callbacks_t));
@@ -242,11 +247,12 @@ int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN],
 				ret = -1;
 				break;
 			}
-			ret = dnssd_register_raop(m_pDnsSd, serverName, raop_port, hwaddr, sizeof(hwaddr), authPassword != NULL ? 1 : 0);
-			if (ret < 0) {
-				break;
-			}
-			ret = dnssd_register_airplay(m_pDnsSd, serverName, airplay_port, hwaddr, sizeof(hwaddr), authPassword != NULL ? 1 : 0);
+			m_serviceName = serverName;
+			m_raopPort = raop_port;
+			m_airplayPort = airplay_port;
+			memcpy(m_hwaddr, hwaddr, sizeof(m_hwaddr));
+			m_pinRequired = authPassword != NULL;
+			ret = registerServices();
 			if (ret < 0) {
 				break;
 			}
@@ -264,6 +270,32 @@ int FgAirplayServer::start(const char serverName[AIRPLAY_NAME_LEN],
 	}
 
 	return ret;
+}
+
+int FgAirplayServer::registerServices()
+{
+	int ret = dnssd_register_raop(m_pDnsSd, m_serviceName.c_str(), m_raopPort,
+		m_hwaddr, sizeof(m_hwaddr), m_pinRequired ? 1 : 0);
+	if (ret >= 0) {
+		ret = dnssd_register_airplay(m_pDnsSd, m_serviceName.c_str(), m_airplayPort,
+			m_hwaddr, sizeof(m_hwaddr), m_pinRequired ? 1 : 0);
+	}
+	m_advertising = ret >= 0;
+	return ret;
+}
+
+void FgAirplayServer::setAdvertising(bool enabled)
+{
+	if (m_pDnsSd == NULL || m_advertising == enabled) {
+		return;
+	}
+	if (enabled) {
+		registerServices();
+	} else {
+		dnssd_unregister_airplay(m_pDnsSd);
+		dnssd_unregister_raop(m_pDnsSd);
+		m_advertising = false;
+	}
 }
 
 void FgAirplayServer::stop()
