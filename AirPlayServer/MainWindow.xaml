@@ -1,0 +1,213 @@
+<Window x:Class="AirPlayServer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AirPlay Receiver" Width="960" Height="600" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterScreen"
+        Closing="Window_Closing" KeyUp="Window_KeyUp">
+    <DockPanel>
+        <DockPanel x:Name="PipBar" DockPanel.Dock="Top" Height="32" Visibility="Collapsed"
+                   Background="{DynamicResource LayerFillColorDefaultBrush}"
+                   MouseLeftButtonDown="PipBar_MouseLeftButtonDown">
+            <Button DockPanel.Dock="Right" Margin="4" Padding="8,0" Click="ExitPip_Click"
+                    ToolTip="Restore the normal receiver window (P)">
+                <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE73F;" FontSize="12"/>
+            </Button>
+            <TextBlock Text="AirPlay Receiver" VerticalAlignment="Center" Margin="12,0" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+        </DockPanel>
+
+        <Border x:Name="ControlsPanel" DockPanel.Dock="Right" Width="320" Visibility="Collapsed" ClipToBounds="True"
+                Background="{DynamicResource LayerFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="1,0,0,0">
+            <ScrollViewer Width="319" HorizontalAlignment="Left" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="16">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" VerticalAlignment="Center" Padding="8,6"
+                                Click="HideControls_Click" ToolTip="Hide controls (H)">
+                            <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE76C;" FontSize="12"/>
+                        </Button>
+                        <TextBlock x:Name="SessionText" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    </DockPanel>
+                    <TextBlock x:Name="StatsText" Style="{StaticResource Description}" Margin="0,2,0,0"/>
+                    <TextBlock x:Name="DroppedText" Style="{StaticResource Warning}" Visibility="Collapsed"/>
+
+                    <TextBlock Text="View" Style="{StaticResource SectionHeader}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel>
+                                <TextBlock x:Name="ViewText" DockPanel.Dock="Right" Style="{StaticResource Description}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="Zoom and rotation" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <UniformGrid Columns="2" Margin="0,12,0,0">
+                                <Button x:Name="RotateButton" Margin="0,0,4,0" HorizontalAlignment="Stretch"
+                                        Click="Rotate_Click" ToolTip="Rotate the stream clockwise (R)">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE7AD;" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Rotate" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ResetViewButton" Margin="4,0,0,0" HorizontalAlignment="Stretch"
+                                        Click="ResetView_Click" ToolTip="Return to fit-to-window at 0 degrees">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE72C;" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Reset" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="Open" Click="Pip_Click" VerticalAlignment="Center"/>
+                            <StackPanel Margin="0,0,12,0">
+                                <TextBlock Text="Picture in picture"/>
+                                <TextBlock Text="Compact video window above other apps (P)" Style="{StaticResource Description}"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel>
+                                <CheckBox x:Name="PrivacyToggle" DockPanel.Dock="Right" Style="{StaticResource ToggleSwitch}"
+                                          VerticalAlignment="Center" Click="Privacy_Click"/>
+                                <StackPanel Margin="0,0,12,0">
+                                    <TextBlock Text="Hide from captures"/>
+                                    <TextBlock Text="Stays visible here; recordings see nothing and the clean feed goes black (Ctrl+Shift+H)"
+                                               Style="{StaticResource Description}"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <TextBlock x:Name="ExclusionWarning" Text="Windows capture exclusion is unavailable."
+                                       Style="{StaticResource Warning}" Margin="0,8,0,0" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Screen Cast" Style="{StaticResource SectionHeader}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel>
+                                <CheckBox x:Name="ScreenCastCheck" DockPanel.Dock="Right" Style="{StaticResource ToggleSwitch}"
+                                          VerticalAlignment="Center" Click="ScreenCast_Click"/>
+                                <StackPanel Margin="0,0,12,0">
+                                    <TextBlock Text="Screen Cast mode"/>
+                                    <TextBlock Text="Exposes a clean video source for OBS and Discord" Style="{StaticResource Description}"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <StackPanel x:Name="ScreenCastOptions" Margin="0,12,0,0">
+                                <DockPanel Margin="0,0,0,8">
+                                    <CheckBox x:Name="HideInterfaceCheck" DockPanel.Dock="Right" Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Click="ScreenCast_Click"/>
+                                    <TextBlock Text="Hide interface from captures" VerticalAlignment="Center" TextWrapping="Wrap"
+                                               ToolTip="Hides this receiver window from Display Capture; use the clean-feed source in OBS"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,0,0,8">
+                                    <CheckBox x:Name="CropCheck" DockPanel.Dock="Right" Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Click="ScreenCast_Click"/>
+                                    <TextBlock Text="Crop clean feed to video" VerticalAlignment="Center" TextWrapping="Wrap"
+                                               ToolTip="Removes letterboxing and pillarboxing from the clean OBS feed"/>
+                                </DockPanel>
+                                <TextBlock Text="Share source: AirPlay Receiver - Clean Feed" Style="{StaticResource Description}"
+                                           ToolTip="Select this source in OBS Window Capture or Discord's Applications picker"/>
+                                <TextBlock x:Name="CleanFeedWaitingText" Text="Clean feed is waiting for its renderer to start"
+                                           Style="{StaticResource Warning}" Visibility="Collapsed"/>
+                                <TextBlock x:Name="CaptureProtectionText"
+                                           Text="Display Capture protection is unavailable on this Windows version"
+                                           Style="{StaticResource Warning}" Visibility="Collapsed"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Playback" Style="{StaticResource SectionHeader}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="Quality"/>
+                            <ComboBox x:Name="QualityCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                      SelectionChanged="Quality_SelectionChanged">
+                                <ComboBoxItem Content="30 fps / Best" ToolTip="Sharper image at 30 fps"/>
+                                <ComboBoxItem Content="60 fps / Balanced" ToolTip="Smooth 60 fps with balanced filtering"/>
+                                <ComboBoxItem Content="60 fps / Low latency" ToolTip="Lowest latency at 60 fps"/>
+                            </ComboBox>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel>
+                                <TextBlock x:Name="VolumeText" DockPanel.Dock="Right" Style="{StaticResource Description}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="Output volume"/>
+                            </DockPanel>
+                            <DockPanel Margin="0,8,0,0">
+                                <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource IconFont}" Text="&#xE767;"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <Slider x:Name="VolumeSlider" Minimum="0" Maximum="100" IsSnapToTickEnabled="True"
+                                        TickFrequency="1" ValueChanged="Volume_ValueChanged" VerticalAlignment="Center"
+                                        ToolTip="Playback volume on this PC"/>
+                            </DockPanel>
+                            <TextBlock x:Name="AudioText" Style="{StaticResource Description}" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <Border x:Name="ShowControlsStrip" DockPanel.Dock="Right" Width="44" Visibility="Collapsed"
+                Background="{DynamicResource LayerFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="1,0,0,0">
+            <Button VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,16,0,0" Padding="8,6"
+                    Click="ShowControls_Click" ToolTip="Show controls (H)">
+                <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE76B;" FontSize="12"/>
+            </Button>
+        </Border>
+
+        <Grid x:Name="VideoArea">
+            <StackPanel x:Name="HomePanel" VerticalAlignment="Center" HorizontalAlignment="Center" Width="400">
+                <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xEC15;" FontSize="48"
+                           HorizontalAlignment="Center" Foreground="{DynamicResource AccentFillColorDefaultBrush}"/>
+                <TextBlock x:Name="HomeTitle" Style="{DynamicResource TitleTextBlockStyle}"
+                           HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,16,0,0"/>
+                <TextBlock x:Name="HomeDetail" Style="{StaticResource Description}" FontSize="14"
+                           HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+                <Border Style="{StaticResource Card}" Margin="0,24,0,0">
+                    <DockPanel>
+                        <Button x:Name="SettingsButton" DockPanel.Dock="Right" VerticalAlignment="Center"
+                                Click="Settings_Click" ToolTip="Receiver and security settings">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE713;" VerticalAlignment="Center"/>
+                                <TextBlock Text="Settings" Margin="8,0,0,0"/>
+                            </StackPanel>
+                        </Button>
+                        <StackPanel Margin="0,0,12,0">
+                            <TextBlock x:Name="ReceiverNameText" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                <Ellipse x:Name="StatusDot" Width="8" Height="8" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="StatusText" Style="{StaticResource Description}" Margin="6,0,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+                <Button x:Name="RestartBonjourButton" HorizontalAlignment="Center" Margin="0,8,0,0"
+                        Style="{DynamicResource AccentButtonStyle}" Visibility="Collapsed"
+                        Click="RestartBonjour_Click" ToolTip="Requires administrator permission">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xEA18;" VerticalAlignment="Center"/>
+                        <TextBlock Text="Restart Bonjour service" Margin="8,0,0,0"/>
+                    </StackPanel>
+                </Button>
+                <Border x:Name="FirewallCard" Style="{StaticResource Card}" Margin="0,8,0,0" Visibility="Collapsed">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource IconFont}" Text="&#xE7BA;"
+                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                   VerticalAlignment="Top" Margin="0,2,12,0"/>
+                        <Button x:Name="FirewallButton" DockPanel.Dock="Right" VerticalAlignment="Center"
+                                Margin="12,0,0,0" Click="Firewall_Click"/>
+                        <StackPanel>
+                            <TextBlock x:Name="FirewallTitle" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="FirewallDetail" Style="{StaticResource Description}"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </DockPanel>
+</Window>

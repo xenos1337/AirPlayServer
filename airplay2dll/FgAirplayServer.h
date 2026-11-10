@@ -23,8 +23,12 @@ public:
 		unsigned int displayWidth, unsigned int displayHeight, bool compressedOnly = false);
 	void stop();
 	float setScale(float fRatio);
+	// Withdraws or restores the Bonjour advertisement without stopping the
+	// receiver, so others stop seeing it while a device is streaming.
+	void setAdvertising(bool enabled);
 
 protected:
+	int registerServices();
 	void clearChannels();
 	FgAirplayChannel* getChannel(const char* remoteDeviceId);
 
@@ -77,4 +81,12 @@ protected:
 	float					m_fScaleRatio;
 	bool					m_compressedOnly;
 	FgAirplayChannelMap		m_mapChannel;
+
+	// Bonjour registration details, kept to re-advertise after a session.
+	std::string				m_serviceName;
+	unsigned short			m_raopPort;
+	unsigned short			m_airplayPort;
+	char					m_hwaddr[6];
+	bool					m_pinRequired;
+	bool					m_advertising;
 };

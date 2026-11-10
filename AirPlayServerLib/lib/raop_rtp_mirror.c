@@ -415,9 +415,8 @@ raop_rtp_mirror_thread(void *arg)
             nfds = raop_rtp_mirror->mirror_data_sock+1;
         } else {
             FD_SET(stream_fd, &rfds);
-#ifndef WIN32
-            nfds = stream_fd+1;
-#endif
+            /* Winsock ignores nfds, but it must not be read uninitialized. */
+            nfds = (int)stream_fd+1;
         }
         ret = select(nfds, &rfds, NULL, NULL, &tv);
         if (ret == 0) {

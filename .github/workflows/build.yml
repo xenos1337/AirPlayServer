@@ -32,12 +32,17 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
       - name: Create MSYS2 linker directory
         run: New-Item -ItemType Directory -Force -Path "C:\msys64\mingw32\lib\gcc\i686-w64-mingw32\9.2.0" | Out-Null
         shell: pwsh
 
       - name: Build solution (Release|x64)
-        run: msbuild AirPlay.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m
+        run: msbuild AirPlay.sln /restore /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m
 
       - name: Verify open-source codec boundary
         shell: pwsh
@@ -91,7 +96,7 @@ jobs:
         run: |
           $desktopDir = Join-Path $env:RUNNER_TEMP 'AirPlayServer-Desktop-Win-x64'
           New-Item -ItemType Directory -Force -Path $desktopDir | Out-Null
-          foreach ($fileName in @('AirPlayServer.exe', 'airplay2dll.dll', 'dnssd.dll', 'SDL2.dll', 'avcodec-62.dll', 'avutil-60.dll', 'swscale-9.dll', 'msys-2.0.dll')) {
+          foreach ($fileName in @('AirPlayServer.exe', 'AirPlayServer.dll', 'AirPlayServer.runtimeconfig.json', 'AirPlayServer.deps.json', 'AirPlayCore.dll', 'airplay2dll.dll', 'dnssd.dll', 'SDL2.dll', 'avcodec-62.dll', 'avutil-60.dll', 'swscale-9.dll', 'msys-2.0.dll')) {
             Copy-Item -LiteralPath (Join-Path 'x64/Release' $fileName) -Destination $desktopDir -ErrorAction Stop
           }
           Copy-Item -LiteralPath 'LICENSE', 'THIRD_PARTY_NOTICES.md' -Destination $desktopDir

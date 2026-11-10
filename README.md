@@ -6,47 +6,12 @@ This project is an updated fork of [fingergit/airplay2-win](https://github.com/f
 
 ## Main Screen
 <div align="center">
-    <img style="height: 512px; width: auto;" src="https://github.com/user-attachments/assets/ffedab29-b483-467d-991a-4060503b0fc0" />
+    <img width="760" src="docs/images/home.png" alt="Home screen waiting for a device" />
 </div>
 
+## Settings
 <div align="center">
-    <table>
-        <tr>
-            <th>Settings</th>
-            <th>Pin Approval</th>
-        </tr>
-        <tr>
-            <td>
-                <img width="420" src="https://github.com/user-attachments/assets/f6f46275-112e-4126-9baf-61666502d03f" />
-            </td>
-            <td>
-                <img width="420" src="https://github.com/user-attachments/assets/c492d993-0cae-4abb-892c-65c601e13a68" />
-            </td>
-        </tr>
-    </table>
-</div>
-
-## Viewer
-<div align="center">
-    <img style="height: 720px; width: auto;" src="https://github.com/user-attachments/assets/9b0c071e-070a-43f0-89b5-a936d4c11ea7" />
-</div>
-
-## 
-<div align="center">
-    <table>
-        <tr>
-            <th>Controls</th>
-            <th>PIP (Picture in Picture) Mode</th>
-        </tr>
-        <tr>
-            <td>
-                <img src="https://github.com/user-attachments/assets/3997a422-650b-42ad-8f42-9eba0e71af10" width="420" />
-            </td>
-            <td>
-                <img src="https://github.com/user-attachments/assets/b98681b5-f79a-493e-b9af-c1cd6a89c8c9" width="420" />
-            </td>
-        </tr>
-    </table>
+    <img width="420" src="docs/images/settings.png" alt="Settings window" />
 </div>
 
 ## Install
@@ -56,11 +21,14 @@ This project is an updated fork of [fingergit/airplay2-win](https://github.com/f
 3. Install [Bonjour for Windows](https://support.apple.com/kb/DL999) if it is not already installed. iTunes also includes Bonjour.
 4. Run `AirPlayServer.exe`.
 
-The app warns you at startup if Bonjour is missing or its service is not running.
+The app warns you at startup if Bonjour is missing. If its service is not running, the app offers to start it; Windows asks for administrator permission. If the receiver becomes unavailable later, the home screen shows a `Restart Bonjour service` button.
+
+Only one AirPlayServer runs at a time. Starting it again brings the running window to the front.
 
 ### Requirements
 
 - Windows 10 or later, x64
+- [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (x64)
 - Apple Bonjour for Windows, used for device discovery over mDNS
 
 ## Features
@@ -82,7 +50,7 @@ The app warns you at startup if Bonjour is missing or its service is not running
 
 ### Receiver resolution
 
-Open `Settings` and use `AirPlay resolution` to control the display size advertised to macOS. `Match receiver monitor` is the default: while the receiver is idle, move its window to the Windows monitor you want to match. The advertised size follows that monitor's current mode.
+Open `Settings` and use `AirPlay resolution` to control the display size advertised to macOS. `Match monitor` is the default: while the receiver is idle, move its window to the Windows monitor you want to match. The advertised size follows that monitor's current mode.
 
 Select `Custom` to enter an exact width and height, such as `1920 x 1080` or `2560 x 1440`. Resolution changes are applied when the receiver is idle. Stop and reconnect Screen Mirroring on the Mac to negotiate the new size; an active stream is never interrupted.
 
@@ -93,14 +61,26 @@ server with `AirPlayServer.exe --debug`. A new timestamped log is written for
 each run under `%LOCALAPPDATA%\AirPlayServer\logs` (or the system temporary
 directory if `LOCALAPPDATA` is unavailable). The log includes startup and
 shutdown, connection/device identifiers, AirPlay protocol messages, playback
-and volume callbacks, thread IDs, and unhandled exception details. Debug mode
-is opt-in and does not create log files during normal launches.
+and volume callbacks, thread IDs, and unhandled exception details. Each session
+also writes a per-frame timing CSV (`*-perf.csv`) next to the log. Debug mode
+is opt-in and does not create log files during normal launches. Press `F1`
+while connected for live diagnostics without logging.
+
+### Settings and firewall
+
+Settings are stored in `%APPDATA%\AirPlayServer\airplay_settings.ini`. A
+settings file next to `AirPlayServer.exe` from an earlier version is copied
+there on first start.
+
+If Windows Firewall blocks the receiver, the home screen says so and offers to
+allow it on private networks (administrator permission required). On a network
+set to Public it links to the network settings instead.
 
 ### Optional AirPlay PIN
 
-Enable `Require PIN` from the home screen to approve new connections with a temporary four-digit code. The PIN exists only in memory for the current server session and is never written to disk.
+Enable `Require PIN` in `Settings` to approve new connections with a temporary four-digit code. The PIN exists only in memory for the current server session and is never written to disk.
 
-`Hide PIN from screen capture` protects the code from supported Windows recording APIs. After you accept a connection, AirPlayServer enables capture exclusion and waits one second before displaying the PIN locally. The exclusion remains active until the device connects or you cancel. If Windows cannot enable capture exclusion, the app does not display the PIN.
+`Hide PIN from screen capture` protects the code from supported Windows recording APIs. After you accept a connection, AirPlayServer excludes the PIN window from capture and waits one second before displaying the PIN. If Windows cannot enable capture exclusion, the app does not display the PIN.
 
 ### Controls
 
@@ -116,9 +96,9 @@ Enable `Require PIN` from the home screen to approve new connections with a temp
 | Left-drag while zoomed | Pan the video |
 | Mouse movement | Show the cursor; it hides after five seconds |
 
-The session controls include `Hide from captures`. This keeps the receiver visible on the local monitor, excludes its main window from supported Windows capture APIs, and sends a black frame to the clean feed. Select `Show in captures` or press `Ctrl+Shift+H` to turn it off.
+While a device is connected, the session controls are shown in a panel beside the video. Hide it with the arrow button at its top or `H`; the arrow on the right edge brings it back. They include `Hide from captures`, which keeps the receiver visible on the local monitor, excludes its window from supported Windows capture APIs, and sends a black frame to the clean feed. Turn the switch off or press `Ctrl+Shift+H` to end it.
 
-Select `Picture in picture` or press `P` to open a small, borderless window that stays above other apps. PiP uses the current device's aspect ratio when resized. Move the pointer over the window to reveal the close button. You can drag the invisible strip along the top to move it. Press `P` again to restore the previous window size, position, and maximized state. PiP also closes when the device disconnects.
+Select `Picture in picture` or press `P` to open a small, borderless window that stays above other apps. PiP keeps the current device's aspect ratio when resized. Drag the strip along the top to move it, and use its close button or press `P` again to restore the previous window size, position, and maximized state. PiP also closes when the device disconnects.
 
 ### Screen Cast and the OBS clean feed
 
@@ -135,6 +115,8 @@ In Discord, open `Share Your Screen`, choose `Applications`, and select `AirPlay
 The clean feed follows rotation, zoom, pan, and receiver window resizing. `Crop clean feed to video` removes letterboxing and pillarboxing. AirPlayServer hides the clean feed between sessions and restores it after a device reconnects.
 
 `Hide interface from captures` excludes the local receiver from supported Display Capture paths on Windows 10 version 2004 and later. It is meant to keep controls out of a presentation. It is not DRM. Use Window Capture in OBS for the clean feed.
+
+`Output volume` is the receiver's own volume on top of the sender's. Each new connection starts it at 30% or lower so a sender at full volume does not start loud; turn it up from the session controls.
 
 ### Quality presets
 
@@ -171,9 +153,10 @@ Mirror timing requests use a 300 ms response window and a three-second cadence. 
 
 ## Build from source
 
-The projects target Visual Studio 2026 with the v145 toolset and a Windows 10 SDK.
+The native projects target Visual Studio 2026 with the v145 toolset and a Windows 10 SDK.
+The user interface is a WPF app and needs the .NET 10 SDK.
 With Visual Studio 2022, build from a Developer Command Prompt using
-`msbuild AirPlay.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m`.
+`msbuild AirPlay.sln /restore /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m`.
 
 1. Clone the repository
    ```bash
@@ -190,9 +173,13 @@ The Debug executable is written to `x64\Debug\AirPlayServer.exe`.
 
 ```text
 AirPlayServer/
-|-- AirPlayServer/           # Windows GUI, SDL2, and ImGui
-|   |-- CSDLPlayer.cpp       # Video and audio playback
-|   |-- CImGuiManager.cpp    # Home screen and session controls
+|-- AirPlayServer/           # WPF app (.NET 10): windows, settings, tray
+|   |-- MainWindow.xaml      # Home screen, video host, and session controls
+|   |-- SettingsWindow.xaml  # Receiver and security settings
+|   `-- Native.cs            # Interop with AirPlayCore.dll
+|-- AirPlayCore/             # Native DLL: receiver, SDL2 video, and audio
+|   |-- AirPlayCore.h        # C API used by the WPF app
+|   |-- CSDLPlayer.cpp       # Video and audio playback on a render thread
 |   |-- CAirServer.cpp       # AirPlay server wrapper
 |   `-- CAirServerCallback.cpp
 |-- AirPlayServerLib/        # AirPlay 2 protocol library
@@ -201,7 +188,7 @@ AirPlayServer/
 |-- MirrorSimAdapter/        # Headless JSONL adapter
 |-- tests/                   # Codec and protocol smoke tests
 |-- dnssd/                   # Bonjour discovery DLL
-|-- external/                # SDL2, FFmpeg, ImGui, and other dependencies
+|-- external/                # SDL2, FFmpeg, and other dependencies
 `-- AirPlay.sln
 ```
 
